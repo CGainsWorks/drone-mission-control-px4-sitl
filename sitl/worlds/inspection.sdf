@@ -1,0 +1,101 @@
+<?xml version="1.0" ?>
+<!--
+  A Gazebo world matching missions/facade_inspection.yaml: a rectangular
+  structure at the mission origin, sized so the 25 m standoff waypoints and the
+  18 m orbit radius both clear it.
+
+  Deliberately minimal. The structure exists so that a facade survey has a
+  facade and so an operator watching the simulation can see whether the vehicle
+  is where it should be. It is not a photogrammetry target.
+-->
+<sdf version="1.9">
+  <world name="inspection">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <!-- Matches the mission origin in missions/facade_inspection.yaml. -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>51.5074</latitude_deg>
+      <longitude_deg>-0.1278</longitude_deg>
+      <elevation>12.0</elevation>
+    </spherical_coordinates>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 100 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.25 0.25 0.25 1</specular>
+      <direction>-0.5 0.2 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>500 500</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>500 500</size></plane></geometry>
+          <material>
+            <ambient>0.4 0.45 0.4 1</ambient>
+            <diffuse>0.5 0.55 0.5 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      The structure under inspection: 24 m x 24 m in plan, 30 m tall. The
+      facade waypoints sit 25 m from the centre, so the standoff from the wall
+      is 13 m; the orbit radius of 18 m clears the corners, which are 17.0 m
+      from the centre.
+    -->
+    <model name="structure">
+      <static>true</static>
+      <pose>0 0 15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>24 24 30</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>24 24 30</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.58 1</ambient>
+            <diffuse>0.65 0.65 0.68 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A slender mast, matching missions/tower_orbit.yaml. -->
+    <model name="mast">
+      <static>true</static>
+      <pose>60 0 25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>1.2</radius><length>50</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>1.2</radius><length>50</length></cylinder></geometry>
+          <material>
+            <ambient>0.7 0.35 0.2 1</ambient>
+            <diffuse>0.8 0.4 0.25 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

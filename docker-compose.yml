@@ -1,0 +1,79 @@
+# `docker compose up` runs the whole pipeline and verifies the artifacts.
+#
+# The SITL services are behind a profile so they are not built or pulled unless
+# asked for: the PX4 + Gazebo image is a couple of gigabytes and the headline
+# result does not need it.
+
+services:
+  # The default. Tests, comparison, figures, RESULTS.md, verification.
+  bench:
+    build: .
+    image: mission-control:latest
+    volumes:
+      - ./results:/app/results
+      - ./analysis/figures:/app/analysis/figures
+      - ./docs:/app/docs
+    command: ["bash", "scripts/run_all.sh"]
+
+  # A one-minute version: one seed, nominal speed, calm air.
+  quick:
+    build: .
+    image: mission-control:latest
+    volumes:
+      - ./results:/app/results
+      - ./analysis/figures:/app/analysis/figures
+      - ./docs:/app/docs
+    command: ["bash", "scripts/run_all.sh", "--quick", "--skip-tests"]
+
+  # Just the comparison, no tests and no documents.
+  comparison:
+    build: .
+    image: mission-control:latest
+    volumes:
+      - ./results:/app/results
+    command: ["python", "analysis/run_comparison.py"]
+
+  # Just the test suite.
+  test:
+    build: .
+    image: mission-control:latest
+    command: ["python", "-m", "pytest", "-q"]
+
+  # Re-tune both controllers on the training scenarios and rewrite
+  # config/tuned_gains.yaml.
+  tune:
+    build: .
+    image: mission-control:latest
+    volumes:
+      - ./config:/app/config
+    command: ["python", "scripts/tune_gains.py"]
+
+  # --- PX4 SITL, behind a profile -------------------------------------------
+  # docker compose --profile sitl up px4
+  px4:
+    profiles: ["sitl"]
+    build:
+      context: ./sitl
+      dockerfile: Dockerfile
+    image: mission-control-px4:latest
+    environment:
+      - PX4_SIM_MODEL=gz_x500
+      - HEADLESS=1
+    ports:
+      - "14540:14540/udp"
+    command: ["make", "px4_sitl", "gz_x500"]
+
+  # Flies a mission through the same mission-control stack, against PX4.
+  # docker compose --profile sitl run --rm sitl-mission
+  sitl-mission:
+    profiles: ["sitl"]
+    build: .
+    image: mission-control:latest
+    depends_on:
+      - px4
+    volumes:
+      - ./results:/app/results
+    environment:
+      - PX4_ADDRESS=udp://px4:14540
+    command: ["python", "scripts/run_px4_sitl.py", "--mission",
+              "missions/facade_inspection.yaml", "--tracker", "mpc"]

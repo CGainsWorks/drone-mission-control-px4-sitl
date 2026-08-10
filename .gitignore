@@ -1,0 +1,34 @@
+# Generated results. Everything under results/ is reproducible from
+# `python analysis/run_comparison.py`, so none of it belongs in git. The
+# committed outputs are docs/RESULTS.md, docs/FAILSAFE_MATRIX.md,
+# analysis/figures/ and config/tuned_gains.yaml.
+results/
+
+# Flight logs, in either format. Pointers live in docs/, the logs do not.
+*.ulg
+*.ulog
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Notebooks: the committed .ipynb files are stripped of output, so a rerun does
+# not produce a diff of base64 images.
+.ipynb_checkpoints/
+
+# Matplotlib and OS noise
+.DS_Store
+Thumbs.db
+*.swp

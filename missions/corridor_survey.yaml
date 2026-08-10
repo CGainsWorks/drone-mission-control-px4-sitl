@@ -1,0 +1,114 @@
+# Boustrophedon ("lawnmower") corridor survey.
+#
+# The other standard inspection pattern: parallel passes with a heading reversal
+# at each end. Deliberately the hardest geometry in the set.
+#
+# Each turnaround is two 90-degree corners joined by a 15 m cross leg, not one
+# 180-degree corner — which is also how it is flown in practice, because a true
+# reversal has no arc tangent to both legs. The consequence is that the corner
+# radius is capped by the lane spacing rather than by the mission's own setting,
+# so the turns are tighter than anywhere else in the grid.
+#
+# Yaw follows the path, so the aircraft swings through 180 degrees at every
+# turnaround. That is what makes this mission the one that exposes weak yaw
+# authority and any ill-conditioning in the attitude law near a reversal.
+
+name: corridor_survey
+description: >
+  Five-lane lawnmower survey on 15 m lane spacing, with a heading reversal at
+  each end. Path-following yaw, so the vehicle turns through 180 degrees at
+  every turnaround.
+
+origin:
+  latitude: 51.5074
+  longitude: -0.1278
+  altitude: 12.0
+
+defaults:
+  cruise_speed: 5.0
+  acceptance_radius: 1.5
+  yaw_mode: path
+  max_tangential_acceleration: 3.0
+  max_lateral_acceleration: 3.5
+  max_climb_rate: 2.5
+  max_descent_rate: 1.5
+  corner_mode: round
+  corner_radius: 6.0
+
+geofence:
+  polygon_ned:
+    - [-70.0, -30.0]
+    - [-70.0, 100.0]
+    - [70.0, 100.0]
+    - [70.0, -30.0]
+  min_altitude: 3.0
+  max_altitude: 60.0
+  warning_margin: 6.0
+  action: rtl
+
+failsafe:
+  low_battery_remaining: 0.25
+  critical_battery_remaining: 0.12
+  link_loss_timeout_s: 3.0
+  link_loss_critical_s: 15.0
+  gnss_loss_timeout_s: 2.0
+  rtl_altitude: 35.0
+
+items:
+  - type: takeoff
+    altitude: 20.0
+    label: climb to survey height
+
+  - type: waypoint
+    north: -50.0
+    east: 0.0
+    altitude: 20.0
+    label: lane 1 start
+  - type: waypoint
+    north: 50.0
+    east: 0.0
+    altitude: 20.0
+    label: lane 1 end
+  - type: waypoint
+    north: 50.0
+    east: 15.0
+    altitude: 20.0
+    label: lane 2 start
+  - type: waypoint
+    north: -50.0
+    east: 15.0
+    altitude: 20.0
+    label: lane 2 end
+  - type: waypoint
+    north: -50.0
+    east: 30.0
+    altitude: 20.0
+    label: lane 3 start
+  - type: waypoint
+    north: 50.0
+    east: 30.0
+    altitude: 20.0
+    label: lane 3 end
+  - type: waypoint
+    north: 50.0
+    east: 45.0
+    altitude: 20.0
+    label: lane 4 start
+  - type: waypoint
+    north: -50.0
+    east: 45.0
+    altitude: 20.0
+    label: lane 4 end
+  - type: waypoint
+    north: -50.0
+    east: 60.0
+    altitude: 20.0
+    label: lane 5 start
+  - type: waypoint
+    north: 50.0
+    east: 60.0
+    altitude: 20.0
+    label: lane 5 end
+
+  - type: rtl
+  - type: land

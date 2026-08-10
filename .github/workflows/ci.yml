@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Everything that guards correctness. Runs on every push and is the job that
+  # must stay green.
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the test suite
+        run: python -m pytest -q
+        env:
+          PYTHONPATH: src
+
+  # The headline result, end to end, through the same entry point the README
+  # tells a reader to run. Using the documented command rather than a bespoke
+  # sequence is what stops CI drifting away from the instructions.
+  pipeline:
+    name: Full pipeline and reproducibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Full pipeline (scripts/run_all.sh)
+        run: bash scripts/run_all.sh --skip-tests
+        env:
+          PYTHONPATH: src
+
+      # The comparison is deterministic: every generator is seeded and the
+      # results are sorted before writing, so a clean checkout must regenerate
+      # the committed artifacts unchanged. If this fails, either the committed
+      # documents are stale or something has stopped being reproducible — and
+      # both are worth knowing about.
+      - name: Committed results are reproducible
+        run: |
+          if ! git diff --exit-code --stat -- \
+              docs/RESULTS.md docs/FAILSAFE_MATRIX.md analysis/figures; then
+            echo "::error::regenerating changed committed artifacts."
+            echo "Run 'bash scripts/run_all.sh' locally and commit the result."
+            git diff -- docs/RESULTS.md docs/FAILSAFE_MATRIX.md | head -100
+            exit 1
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-results
+          path: |
+            results/runs.csv
+            results/comparison_meta.json
+            analysis/figures/*.png
+            docs/RESULTS.md
+          if-no-files-found: warn
+
+  # The Docker image is what the README tells people to run first, so it has to
+  # build and the quick pipeline has to pass inside it.
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t mission-control:ci .
+
+      - name: Run the quick pipeline inside it
+        run: |
+          docker run --rm mission-control:ci \
+            bash scripts/run_all.sh --quick --skip-tests
+
+  # Style, kept separate so a lint failure never masks a correctness failure.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install tooling
+        run: pip install ruff
+
+      - name: Ruff
+        run: ruff check src tests analysis scripts
+
+  # The mission files are the one input that comes from outside the software, so
+  # they are validated on their own, with a clear failure message.
+  missions:
+    name: Mission files validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate every shipped mission
+        run: python scripts/validate_missions.py
+        env:
+          PYTHONPATH: src

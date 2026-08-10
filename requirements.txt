@@ -1,0 +1,11 @@
+# Core dependencies. Everything the comparison, the tests and the figures need.
+#
+# Pinned to lower bounds rather than exact versions: the numerical results here
+# are deterministic given a fixed seed and do not depend on a specific numpy
+# build, and pinning exactly would make the image stale within months.
+numpy>=1.24,<3
+scipy>=1.10,<2
+matplotlib>=3.7,<4
+pandas>=2.0,<3
+PyYAML>=6.0,<7
+pytest>=7.4

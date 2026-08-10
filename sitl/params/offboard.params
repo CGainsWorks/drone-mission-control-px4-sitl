@@ -1,0 +1,41 @@
+# PX4 parameters that make offboard attitude control behave predictably in SITL.
+#
+# Loaded by the SITL image at startup. Each of these is here because its default
+# gets in the way of an external trajectory controller, not because it makes the
+# numbers look better.
+
+# --- offboard -------------------------------------------------------------
+# How long PX4 tolerates a stalled setpoint stream before dropping out of
+# offboard. The default of 0.5 s is unforgiving when the controlling process
+# shares a laptop with Gazebo; 1.0 s survives a garbage collection pause without
+# being long enough to matter in a real failure.
+param set-default COM_OF_LOSS_T 1.0
+
+# Do not fall back to a mode that fights the external controller: hold position
+# and wait, which is what the failsafe matrix in this repository expects.
+param set-default COM_OBL_RC_ACT 2
+
+# --- estimator ------------------------------------------------------------
+# GPS only, matching the sensor suite this project models: no optical flow, no
+# vision, no external heading.
+param set-default EKF2_HGT_REF 1
+param set-default EKF2_GPS_CTRL 7
+param set-default EKF2_EV_CTRL 0
+param set-default EKF2_OF_CTRL 0
+
+# --- arming ---------------------------------------------------------------
+# SITL has no safety switch and no real RC transmitter.
+param set-default COM_ARM_WO_GPS 0
+param set-default COM_RC_IN_MODE 4
+param set-default NAV_RCL_ACT 0
+
+# --- attitude and rate control -------------------------------------------
+# Left at PX4 defaults on purpose. The comparison is between two *trajectory*
+# controllers; retuning the inner loop underneath them would change what is
+# being measured.
+
+# --- logging --------------------------------------------------------------
+# Log from boot, at full rate, so the ULog is comparable with the ones this
+# repository writes itself.
+param set-default SDLOG_MODE 1
+param set-default SDLOG_PROFILE 3

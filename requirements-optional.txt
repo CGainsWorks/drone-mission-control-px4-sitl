@@ -1,0 +1,11 @@
+# Optional extras. Nothing in the core pipeline needs these, and the whole test
+# suite passes without them.
+#
+#   mavsdk   the PX4 SITL backend (src/mission_control/mavlink_bridge/px4.py)
+#   pyulog   cross-checks our ULog writer against the reference implementation
+#   jupyter  runs the notebooks in analysis/notebooks/
+-r requirements.txt
+mavsdk>=1.4
+pyulog>=1.0
+jupyter>=1.0
+nbconvert>=7.0

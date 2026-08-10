@@ -1,0 +1,20 @@
+# Normalise line endings so a clone on Windows and a clone on Linux produce the
+# same bytes, which matters because CI checks that regenerating the committed
+# results leaves the tree clean.
+* text=auto eol=lf
+*.png binary
+*.ulg binary
+*.sh text eol=lf
+
+# Git LFS. Nothing currently exceeds the threshold — the figures are tens of
+# kilobytes — but flight logs and any recorded media would, and the rules are
+# here so that a large file added later is tracked correctly from the first
+# commit rather than after it has already entered the history.
+*.ulg filter=lfs diff=lfs merge=lfs -text
+*.bag filter=lfs diff=lfs merge=lfs -text
+*.mcap filter=lfs diff=lfs merge=lfs -text
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.gif filter=lfs diff=lfs merge=lfs -text
+
+# Notebooks diff badly by default; treat them as text but do not try to merge.
+*.ipynb text merge=binary

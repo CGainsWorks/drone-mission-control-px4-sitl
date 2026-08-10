@@ -1,0 +1,82 @@
+# Helical orbit of a tall slender structure — a mast, a chimney, a wind turbine.
+#
+# Continuously curved, so unlike the facade and corridor missions there are no
+# straight legs for a controller to coast along and no corners to round. The
+# whole flight is a sustained lateral acceleration at a fixed radius, and the
+# reference velocity is never constant for a moment.
+#
+# It is the cleanest test of steady-state curved tracking, because the required
+# acceleration is known exactly in closed form: v^2 / R, inward, throughout.
+
+name: tower_orbit
+description: >
+  Three stacked orbits of a slender structure at 15 m radius, climbing between
+  each. Continuously curved reference with no straight sections.
+
+origin:
+  latitude: 51.5074
+  longitude: -0.1278
+  altitude: 12.0
+
+defaults:
+  cruise_speed: 5.0
+  acceptance_radius: 1.5
+  yaw_mode: poi
+  max_tangential_acceleration: 2.5
+  max_lateral_acceleration: 4.0
+  max_climb_rate: 2.0
+  max_descent_rate: 1.5
+  corner_mode: round
+  corner_radius: 5.0
+
+geofence:
+  polygon_ned:
+    - [-45.0, -45.0]
+    - [-45.0, 45.0]
+    - [45.0, 45.0]
+    - [45.0, -45.0]
+  min_altitude: 3.0
+  max_altitude: 70.0
+  warning_margin: 5.0
+  action: rtl
+
+failsafe:
+  low_battery_remaining: 0.25
+  critical_battery_remaining: 0.12
+  link_loss_timeout_s: 3.0
+  link_loss_critical_s: 15.0
+  gnss_loss_timeout_s: 2.0
+  rtl_altitude: 45.0
+
+items:
+  - type: takeoff
+    altitude: 15.0
+    label: climb to the first band
+
+  - type: orbit
+    north: 0.0
+    east: 0.0
+    altitude: 15.0
+    radius: 15.0
+    sweep_deg: 360.0
+    clockwise: true
+    label: lower band
+  - type: orbit
+    north: 0.0
+    east: 0.0
+    altitude: 28.0
+    radius: 15.0
+    sweep_deg: 360.0
+    clockwise: false
+    label: middle band, reversed direction
+  - type: orbit
+    north: 0.0
+    east: 0.0
+    altitude: 41.0
+    radius: 15.0
+    sweep_deg: 360.0
+    clockwise: true
+    label: upper band
+
+  - type: rtl
+  - type: land

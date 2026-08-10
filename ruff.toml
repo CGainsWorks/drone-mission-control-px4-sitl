@@ -1,0 +1,38 @@
+# Lint configuration.
+#
+# The line length is 100 rather than the default 88: this is numerical code, and
+# the alternative to a slightly longer line is usually a worse-named variable or
+# an expression broken across three lines in a place that hides its structure.
+
+line-length = 100
+target-version = "py39"
+
+exclude = [
+    ".git",
+    "__pycache__",
+    "results",
+    "sitl",
+]
+
+[lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    # Ambiguous variable names. This code uses `l` for a lower bound and `I` for
+    # inertia because that is what the equations use.
+    "E741",
+]
+
+[lint.per-file-ignores]
+# Notebooks are written in notebook style: imports appear where the narrative
+# introduces them, and `ax.set_xlabel(...); ax.set_ylabel(...)` on one line is
+# clearer than four lines of plumbing between two lines of substance.
+"*.ipynb" = ["E402", "E702", "E703"]
+
+# Entry-point scripts must extend sys.path before importing the package, since
+# they are run directly rather than installed.
+"scripts/*.py" = ["E402"]
+"analysis/*.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
+
+[lint.isort]
+known-first-party = ["mission_control"]
