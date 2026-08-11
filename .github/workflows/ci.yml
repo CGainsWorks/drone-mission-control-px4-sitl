@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The full 84-run reproduction is on a schedule rather than on every push.
+  # See the `pipeline` job.
+  schedule:
+    - cron: "17 4 * * 1"
 
 jobs:
   # Everything that guards correctness. Runs on every push and is the job that
@@ -31,9 +35,19 @@ jobs:
   # The headline result, end to end, through the same entry point the README
   # tells a reader to run. Using the documented command rather than a bespoke
   # sequence is what stops CI drifting away from the instructions.
+  #
+  # Weekly and on request, not on every push. It takes 68 minutes on a two-core
+  # runner — 84 seeded flights plus two notebooks — and it is a reproduction of
+  # a result that is already committed, not a guard against a regression. The
+  # guards are the test suite, the lint, the mission validation and the quick
+  # pipeline inside the Docker image, and those run on every push in about
+  # eleven minutes between them. Paying an hour per commit to re-derive numbers
+  # that cannot have changed unless a test also broke buys nothing, and a job
+  # slow enough to be ignored is worse than no job.
   pipeline:
     name: Full pipeline and reproducibility
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - uses: actions/checkout@v4
 
@@ -52,18 +66,18 @@ jobs:
 
       # The comparison is deterministic: every generator is seeded and the
       # results are sorted before writing, so a clean checkout must regenerate
-      # the committed artifacts unchanged. If this fails, either the committed
+      # the committed documents unchanged. If this fails, either the committed
       # documents are stale or something has stopped being reproducible — and
       # both are worth knowing about.
+      #
+      # This used to be an inline `git diff` over the documents *and* the
+      # figures, and it could never have passed anywhere but the machine that
+      # generated them: matplotlib does not render byte-identical PNGs across
+      # versions, and the compute-cost table is wall-clock. It failed on every
+      # run for that reason, an hour into the job. The script compares what is
+      # actually deterministic and says why it skips the rest.
       - name: Committed results are reproducible
-        run: |
-          if ! git diff --exit-code --stat -- \
-              docs/RESULTS.md docs/FAILSAFE_MATRIX.md analysis/figures; then
-            echo "::error::regenerating changed committed artifacts."
-            echo "Run 'bash scripts/run_all.sh' locally and commit the result."
-            git diff -- docs/RESULTS.md docs/FAILSAFE_MATRIX.md | head -100
-            exit 1
-          fi
+        run: python scripts/check_reproducible.py
 
       # Notebooks are the classic thing that rots silently: nobody opens them
       # until someone does, a year later, and cell three throws. They are run

@@ -22,6 +22,11 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+#: Markers around content that is measured rather than computed, and so does
+#: not reproduce across machines. scripts/check_reproducible.py reads these.
+NON_REPRODUCIBLE_BEGIN = "<!-- machine-dependent: begin -->"
+NON_REPRODUCIBLE_END = "<!-- machine-dependent: end -->"
+
 from mission_control.analysis.comparison import paired_summary  # noqa: E402
 from mission_control.mission.schema import FailsafeSpec  # noqa: E402
 from mission_control.safety import FailsafeMatrix  # noqa: E402
@@ -296,7 +301,13 @@ def write_results(rows: list, path: str) -> str:
             )
     lines.append("")
 
-    lines += ["## What it costs", "", compute_table(rows), "",
+    # Everything between these markers is wall-clock and does not survive a
+    # change of machine. scripts/check_reproducible.py strips the marked region
+    # before comparing, so the reproducibility gate tests the result rather
+    # than the hardware it was measured on. Keep them in step.
+    lines += ["## What it costs", "",
+              NON_REPRODUCIBLE_BEGIN, "",
+              compute_table(rows), "",
               "The control period at 50 Hz is 20 000 us, so both are affordable. "
               "The optimisation column is the QP alone; the whole-step column adds "
               "sampling the reference across the horizon, which is real work but is "
@@ -311,7 +322,7 @@ def write_results(rows: list, path: str) -> str:
               "the page unchanged. Read them as an order of magnitude against the "
               "20 000 us budget, not as a benchmark, and do not treat a difference "
               "from these values as a regression.",
-              ""]
+              "", NON_REPRODUCIBLE_END, ""]
 
     lines += ["## Estimator", "",
               "Shared by both controllers, so it is not a difference between them — "
