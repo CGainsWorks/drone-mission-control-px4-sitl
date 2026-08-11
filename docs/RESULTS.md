@@ -66,10 +66,12 @@ They are kept in the grid deliberately — a comparison that only includes cases
 
 | Controller | Optimisation / control law | Whole control step | 99th percentile step |
 | --- | ---: | ---: | ---: |
-| PID | 286.1 us | 286.1 us | 418.5 us |
-| MPC | 738.3 us | 3640.3 us | 5746.8 us |
+| PID | 358.0 us | 358.0 us | 1499.3 us |
+| MPC | 1073.3 us | 4462.2 us | 12190.7 us |
 
 The control period at 50 Hz is 20 000 us, so both are affordable. The optimisation column is the QP alone; the whole-step column adds sampling the reference across the horizon, which is real work but is cacheable in a way the QP is not.
+
+**These four numbers are the only ones on this page that do not reproduce.** Every flight-derived figure above comes out bit-identical on a re-run, because the simulation is seeded; these are wall-clock measurements of this machine under whatever else it was doing at the time. Re-running the pipeline on a busy machine moved the means by about 1.5x and the 99th percentile by 2.1x, with every other number on the page unchanged. Read them as an order of magnitude against the 20 000 us budget, not as a benchmark, and do not treat a difference from these values as a regression.
 
 ## Estimator
 
