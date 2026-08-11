@@ -177,12 +177,20 @@ def error_distribution(results_csv: str, path: str) -> str:
             values = [row[metric] for row in rows
                       if row["tracker"] == tracker and np.isfinite(row[metric])]
             data.append(values)
-        parts = ax.boxplot(data, labels=["PID", "MPC"], patch_artist=True, widths=0.5)
+        # Tick labels are set afterwards rather than passed to boxplot. The
+        # keyword for them was renamed from `labels` to `tick_labels` in
+        # matplotlib 3.9 and the old name removed later, so passing either one
+        # pins the repository to a matplotlib range. Setting them on the axis
+        # works on every version, which matters because this is generated inside
+        # a container whose matplotlib is whatever pip resolved that day.
+        parts = ax.boxplot(data, patch_artist=True, widths=0.5)
         for patch, colour in zip(parts["boxes"], (PID_COLOUR, MPC_COLOUR)):
             patch.set_facecolor(colour)
             patch.set_alpha(0.65)
         for median in parts["medians"]:
             median.set_color("#212529")
+        ax.set_xticks([1, 2])
+        ax.set_xticklabels(["PID", "MPC"])
         ax.set_ylabel(label)
         ax.grid(axis="y", **GRID_KWARGS)
         ax.set_axisbelow(True)

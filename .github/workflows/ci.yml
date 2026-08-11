@@ -65,6 +65,22 @@ jobs:
             exit 1
           fi
 
+      # Notebooks are the classic thing that rots silently: nobody opens them
+      # until someone does, a year later, and cell three throws. They are run
+      # here against the results the step above produced, so a rename or a
+      # changed column breaks the build rather than the reader.
+      - name: Notebooks execute against the generated results
+        run: |
+          pip install nbconvert ipykernel
+          jupyter nbconvert --to notebook --execute --stdout \
+            --ExecutePreprocessor.timeout=900 \
+            analysis/notebooks/01_ulog_analysis.ipynb > /dev/null
+          jupyter nbconvert --to notebook --execute --stdout \
+            --ExecutePreprocessor.timeout=900 \
+            analysis/notebooks/02_controller_comparison.ipynb > /dev/null
+        env:
+          PYTHONPATH: src
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
