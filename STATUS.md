@@ -4,8 +4,8 @@ Against the build checklist in the README.
 
 | Item | State | Where |
 | --- | :---: | --- |
-| PX4 SITL running with a Gazebo world | built | [`sitl/`](sitl/) |
-| MAVLink connection, arm, takeoff and land under script control | built | [`scripts/run_px4_sitl.py`](scripts/run_px4_sitl.py), [`src/mission_control/mavlink_bridge/px4.py`](src/mission_control/mavlink_bridge/px4.py) |
+| PX4 SITL running with a Gazebo world | built, flown | [`sitl/`](sitl/) |
+| MAVLink connection, arm, takeoff and land under script control | built, flown | [`scripts/run_px4_sitl.py`](scripts/run_px4_sitl.py), [`src/mission_control/mavlink_bridge/px4.py`](src/mission_control/mavlink_bridge/px4.py) |
 | Mission definition schema and loader | built | [`src/mission_control/mission/schema.py`](src/mission_control/mission/schema.py), [`docs/MISSION_SCHEMA.md`](docs/MISSION_SCHEMA.md) |
 | Mission state machine executing a waypoint sequence | built | [`src/mission_control/mission/state_machine.py`](src/mission_control/mission/state_machine.py) |
 | EKF state estimator with RTK and IMU inputs | built | [`src/mission_control/estimation/`](src/mission_control/estimation/), [`docs/ESTIMATOR.md`](docs/ESTIMATOR.md) |
@@ -47,8 +47,10 @@ command:
 These are deliberate and are argued in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md):
 
 - The headline comparison runs against the reference simulation, not PX4 SITL.
-  The SITL path exists and works; it is not the source of the numbers, and the
-  reason is reproducibility.
+  The SITL path has been flown end to end — the full facade mission against
+  PX4 v1.15 with Gazebo, 0.03–0.52 m tracking error, no failsafe — but it is
+  one run in still air, not a measurement, and the reason the numbers come from
+  elsewhere is reproducibility. See [`sitl/README.md`](sitl/README.md).
 - The estimator has no magnetometer, so yaw is weakly observable.
 - The MPC's constraint set is a box on per-axis acceleration rather than a cone
   on total tilt.

@@ -24,6 +24,22 @@
       <render_engine>ogre2</render_engine>
     </plugin>
 
+    <!-- Sensor systems are world-level in Gazebo, not model-level. The x500
+         declares an IMU, a barometer and a NavSat receiver, but those
+         declarations do nothing unless the world loads the matching system
+         here. Omitting them does not produce an error: Gazebo starts, the
+         model spawns, and PX4 simply never receives a measurement, which
+         surfaces much later as "never reported a usable global position".
+         Every one of these is required for the vehicle to be flyable. -->
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-air-pressure-system"
+            name="gz::sim::systems::AirPressure"/>
+    <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+    <!-- How PX4's wind and any external force are applied to the airframe. -->
+    <plugin filename="gz-sim-apply-link-wrench-system"
+            name="gz::sim::systems::ApplyLinkWrench"/>
+
     <!-- Matches the mission origin in missions/facade_inspection.yaml. -->
     <spherical_coordinates>
       <surface_model>EARTH_WGS84</surface_model>

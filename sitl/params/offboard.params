@@ -29,6 +29,27 @@ param set-default COM_ARM_WO_GPS 0
 param set-default COM_RC_IN_MODE 4
 param set-default NAV_RCL_ACT 0
 
+# --- thrust curve ---------------------------------------------------------
+# The single parameter without which nothing here flies.
+#
+# The tracker produces a *normalised collective thrust*: the force it wants,
+# divided by the force four rotors can make. That is a statement about thrust,
+# and it is linear in thrust by construction.
+#
+# PX4's default (THR_MDL_FAC 0) passes that number through to the motors as a
+# control signal, and a rotor's thrust goes as the square of its speed. The
+# gz x500 is exactly quadratic: motorConstant 8.54858e-06 against a maximum
+# 1000 rad/s, so a command of c delivers c^2 * 34.2 N. Hover needs 20.3 N,
+# which is 0.59 of full thrust but 0.77 of full command.
+#
+# Ask for hover and get 0.59^2 * 34.2 = 11.9 N — 59% of the weight. The vehicle
+# does not fall over or report an error; it sits on the ground at what looks
+# like a sensible throttle, tilts towards its target, and drags itself along.
+#
+# THR_MDL_FAC 1.0 tells PX4 the relationship is fully quadratic, so it inverts
+# the curve and a normalised thrust demand means the thrust it says.
+param set-default THR_MDL_FAC 1.0
+
 # --- attitude and rate control -------------------------------------------
 # Left at PX4 defaults on purpose. The comparison is between two *trajectory*
 # controllers; retuning the inner loop underneath them would change what is

@@ -39,7 +39,13 @@ from mission_control.mission.schema import FailsafeSpec  # noqa: E402
 from mission_control.safety import FailsafeMatrix, Geofence, SystemStatus  # noqa: E402
 from mission_control.sim.quadrotor import QuadrotorParams  # noqa: E402
 
+# The same rate the reference simulation runs at, so the tracker is stepped
+# identically in both. This is achievable only because the backend holds its
+# telemetry subscriptions open: fetching state per iteration instead capped the
+# loop at 0.5 Hz. Measured against PX4 SITL, vehicle_attitude_setpoint arrives
+# at 51 Hz.
 CONTROL_RATE_HZ = 50.0
+REPORT_INTERVAL_S = 2.0
 
 
 def main() -> int:
@@ -47,7 +53,7 @@ def main() -> int:
     parser.add_argument("--mission", default=os.path.join(ROOT, "missions",
                                                           "facade_inspection.yaml"))
     parser.add_argument("--tracker", default="mpc", choices=["pid", "mpc"])
-    parser.add_argument("--address", default=os.environ.get("PX4_ADDRESS", "udp://:14540"))
+    parser.add_argument("--address", default=os.environ.get("PX4_ADDRESS", "udpin://0.0.0.0:14540"))
     parser.add_argument("--timeout", type=float, default=600.0,
                         help="give up after this many seconds of flight")
     args = parser.parse_args()
@@ -57,17 +63,32 @@ def main() -> int:
     print(f"tracker: {args.tracker}")
     print(f"backend: {args.address}")
 
-    # The vehicle parameters describe the airframe the tracker is commanding.
-    # Against SITL these should match the simulated airframe; the defaults here
-    # are close to PX4's gz_x500, and mismatch shows up as a thrust offset the
-    # disturbance estimator absorbs.
-    params = QuadrotorParams()
+    # The vehicle parameters describe the airframe the tracker is commanding,
+    # so against SITL they have to be the *simulated* airframe rather than this
+    # repository's reference one. The tracker divides a force demand by
+    # `max_thrust` and multiplies an acceleration demand by `mass`; both are
+    # wrong from the first sample if these do not match.
+    #
+    # Taken from PX4's Tools/simulation/gz/models/x500_base/model.sdf: a 2.0 kg
+    # body plus four 16.1 g rotors, rotors at (+/-0.174, +/-0.174) m, and
+    # motorConstant 8.54858e-06 against maxRotVelocity 1000 rad/s, which is
+    # 8.55 N per rotor at full command. Thrust-to-weight is 1.69, against 2.17
+    # for the reference airframe — the SITL vehicle has noticeably less margin.
+    params = QuadrotorParams(
+        mass=2.0643,
+        inertia=np.array([0.021667, 0.021667, 0.040000]),
+        arm_length=0.246,
+        max_rotor_thrust=8.549,
+        torque_per_thrust=0.016,
+    )
     tracker = make_tracker(args.tracker, params)
     executive = MissionExecutive(mission)
     geofence = Geofence.from_spec(mission.geofence)
     failsafe = FailsafeMatrix(spec=mission.failsafe or FailsafeSpec())
 
-    backend = make_backend("px4", system_address=args.address)
+    # The mission's own origin, not PX4's launch point, defines what the
+    # waypoint coordinates mean. See Px4SitlBackend.__init__.
+    backend = make_backend("px4", system_address=args.address, origin=mission.origin)
     interval = 1.0 / CONTROL_RATE_HZ
 
     try:
@@ -85,15 +106,33 @@ def main() -> int:
         tracker.reset(backend.state())
 
         next_control = time.monotonic()
+        next_report = 0.0
+        last_elapsed = 0.0
         while True:
             now = time.monotonic()
             if now < next_control:
                 time.sleep(max(0.0, next_control - now))
-            next_control += interval
+                next_control += interval
+            else:
+                # Behind schedule. Re-base rather than accumulating a deficit
+                # that can never be paid off: `next_control += interval` on a
+                # loop that is already late means the sleep is skipped forever
+                # after and the loop free-runs.
+                next_control = time.monotonic() + interval
             elapsed = time.monotonic() - started
             if elapsed > args.timeout:
                 print("timeout; landing")
                 break
+
+            # The step the tracker is told about has to be the step that
+            # actually happened. Every MAVSDK call is a round trip through an
+            # event loop, so this loop does not hit its nominal rate; handing
+            # the tracker a nominal 1/50 s while the real interval is twice
+            # that makes its internal model of its own effect on the vehicle
+            # wrong by the same factor, and the disturbance estimate and rate
+            # limits are then integrating against a clock that does not exist.
+            dt = float(np.clip(elapsed - last_elapsed, 0.5 * interval, 4.0 * interval))
+            last_elapsed = elapsed
 
             backend.poll()
             state = backend.state()
@@ -135,12 +174,19 @@ def main() -> int:
                 backend.land()
                 break
 
-            setpoint = tracker.update(state, reference, elapsed, interval)
+            setpoint = tracker.update(state, reference, elapsed, dt)
             backend.send_attitude_setpoint(setpoint)
 
-            if int(elapsed * CONTROL_RATE_HZ) % int(CONTROL_RATE_HZ * 2) == 0:
+            # Report on elapsed time, not on a loop counter. Counting
+            # iterations and assuming they arrive at CONTROL_RATE_HZ silently
+            # drops most of the report lines as soon as the loop runs at any
+            # other rate — and against PX4 it does, because each MAVSDK call is
+            # a round trip through an event loop.
+            if elapsed >= next_report:
+                next_report += REPORT_INTERVAL_S
                 error = np.linalg.norm(state.position - reference.sample(elapsed).position)
                 print(f"  t={elapsed:6.1f}s  {executive.state.value:<9} "
+                      f"pos=[{state.position[0]:7.1f},{state.position[1]:7.1f}] "
                       f"alt={state.altitude:5.1f} m  err={error:5.2f} m  "
                       f"fence margin={fence.margin_m:6.1f} m")
 

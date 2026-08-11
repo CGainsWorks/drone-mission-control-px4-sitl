@@ -46,6 +46,14 @@ from .backend import BackendError, VehicleBackend
 OFFBOARD_TIMEOUT_S = 0.5
 #: Number of setpoints to prime the stream with before requesting offboard.
 OFFBOARD_PRIME_COUNT = 20
+#: Rate to request for the streams the tracker closes its loop around, Hz.
+TELEMETRY_RATE_HZ = 50.0
+#: Global position only re-anchors the frame; it does not need to be fast.
+POSITION_RATE_HZ = 10.0
+#: Battery state changes on a timescale of minutes.
+BATTERY_RATE_HZ = 1.0
+#: How long to wait for the first sample of every stream before giving up.
+TELEMETRY_FIRST_SAMPLE_TIMEOUT_S = 10.0
 
 
 def _require_mavsdk() -> None:
@@ -72,10 +80,36 @@ class Px4SitlBackend(VehicleBackend):
 
     name = "px4-sitl"
 
-    def __init__(self, system_address: str = "udp://:14540"):
+    def __init__(self, system_address: str = "udpin://0.0.0.0:14540", origin=None):
+        """``origin`` is the mission's :class:`GeodeticOrigin`, or None.
+
+        This argument is not optional in any meaningful sense — it decides what
+        the coordinates in the mission file *mean*.
+
+        PX4's local NED frame is anchored wherever the EKF happened to
+        initialise, which is the launch point. A mission file, by contrast,
+        declares its own ``origin:`` in latitude and longitude, and every
+        waypoint in it is relative to that. The two frames coincide only when
+        the vehicle takes off from the mission origin.
+
+        Anchoring to the launch point instead is silently wrong rather than
+        obviously wrong: the vehicle flies a correctly shaped survey around the
+        wrong point, offset by however far the launch pad is from the origin.
+        Passing the origin here converts PX4's global position into the frame
+        the mission is written in, so the survey lands on the structure it is
+        meant to inspect.
+        """
+        import threading
+
         self.system_address = system_address
+        self.origin = origin
         self._drone = None
         self._loop = None
+        self._thread = None
+        self._telemetry_tasks = []
+        self._expected_streams = set()
+        self._seen_streams = set()
+        self._lock = threading.Lock()
         self._state = VehicleState()
         self._battery = BatteryState()
         self._connected = False
@@ -83,17 +117,30 @@ class Px4SitlBackend(VehicleBackend):
         self._offboard_active = False
 
     # ------------------------------------------------------------------
-    def _run(self, coroutine):
-        """Run one coroutine to completion on the private loop."""
-        return self._loop.run_until_complete(coroutine)
+    def _run(self, coroutine, timeout_s: float = 30.0):
+        """Run one coroutine on the background loop and wait for the result."""
+        import asyncio
+
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        return future.result(timeout_s)
 
     def connect(self, timeout_s: float = 30.0) -> None:
         import asyncio
+        import threading
 
         _require_mavsdk()
         from mavsdk import System
 
+        # The loop runs on its own thread for the lifetime of the connection,
+        # rather than being spun up per call. Telemetry arrives on it
+        # continuously (see _start_telemetry) instead of being fetched, which
+        # is the difference between a control loop that closes at 50 Hz and one
+        # that closes at 0.5 Hz.
         self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._loop.run_forever, name="mavsdk-telemetry", daemon=True
+        )
+        self._thread.start()
         self._drone = System()
         self._run(self._drone.connect(system_address=self.system_address))
 
@@ -132,6 +179,133 @@ class Px4SitlBackend(VehicleBackend):
 
         self._connected = True
         self._last_telemetry_s = time.monotonic()
+        self._start_telemetry()
+
+    def _start_telemetry(self) -> None:
+        """Subscribe once to each stream and keep the subscriptions open.
+
+        This is the whole reason the loop lives on a thread. MAVSDK exposes
+        telemetry as async generators, and it is tempting — it is what this
+        file used to do — to open one, take a single item and drop it, once per
+        control iteration. That reads like a synchronous getter and behaves
+        like nothing of the sort: each fresh subscription waits for the *next*
+        message to arrive, so one iteration paid that wait four times over.
+        Measured against PX4 SITL it cost 2.0 seconds per iteration.
+
+        A position loop closed at 0.5 Hz around state that is up to two seconds
+        stale does not track anything. It oscillates, with a period of about
+        ten seconds and an amplitude of tens of metres, and it does so whatever
+        the tracker is and whatever its gains are — which is exactly what it
+        looked like: PID and MPC failing identically and neither responding to
+        tuning. Nothing above this file was wrong.
+
+        Held open, the same streams cost nothing to read and the loop runs at
+        the rate it asks for.
+        """
+        import asyncio
+
+        async def follow(name, subscribe, apply):
+            while True:
+                try:
+                    async for item in subscribe():
+                        with self._lock:
+                            apply(item)
+                            self._seen_streams.add(name)
+                            self._last_telemetry_s = time.monotonic()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A stream can drop without the link dropping. Re-subscribe
+                    # rather than leaving one field frozen for the rest of the
+                    # flight; link loss is the failsafe matrix's job, and it
+                    # watches _last_telemetry_s.
+                    await asyncio.sleep(0.5)
+
+        def apply_position(sample) -> None:
+            self._state.velocity = np.array(
+                [sample.velocity.north_m_s, sample.velocity.east_m_s,
+                 sample.velocity.down_m_s]
+            )
+            if self.origin is None:
+                self._state.position = np.array(
+                    [sample.position.north_m, sample.position.east_m,
+                     sample.position.down_m]
+                )
+
+        def apply_global(sample) -> None:
+            if self.origin is not None:
+                self._state.position = self.origin.to_ned(
+                    sample.latitude_deg, sample.longitude_deg,
+                    sample.absolute_altitude_m,
+                )
+
+        def apply_attitude(sample) -> None:
+            self._state.orientation = np.array(
+                [sample.w, sample.x, sample.y, sample.z]
+            )
+
+        def apply_rates(sample) -> None:
+            self._state.angular_velocity = np.array(
+                [sample.roll_rad_s, sample.pitch_rad_s, sample.yaw_rad_s]
+            )
+
+        def apply_battery(sample) -> None:
+            self._battery = BatteryState(
+                voltage_v=sample.voltage_v,
+                remaining=sample.remaining_percent / 100.0,
+                current_a=0.0,
+            )
+
+        async def launch():
+            telemetry = self._drone.telemetry
+            # Ask for rates that suit a control loop. PX4's defaults are set
+            # for a ground station watching a map, not for closing a loop.
+            for setter, rate in (
+                (telemetry.set_rate_position_velocity_ned, TELEMETRY_RATE_HZ),
+                (telemetry.set_rate_attitude_quaternion, TELEMETRY_RATE_HZ),
+                (telemetry.set_rate_position, POSITION_RATE_HZ),
+                (telemetry.set_rate_battery, BATTERY_RATE_HZ),
+            ):
+                try:
+                    await setter(rate)
+                except Exception:
+                    # Not fatal: the stream still arrives, just at PX4's
+                    # default rate. Worth continuing rather than refusing to
+                    # fly over a rate request.
+                    pass
+
+            streams = [
+                ("position_velocity_ned", telemetry.position_velocity_ned, apply_position),
+                ("attitude_quaternion", telemetry.attitude_quaternion, apply_attitude),
+                ("angular_velocity", telemetry.attitude_angular_velocity_body, apply_rates),
+                ("battery", telemetry.battery, apply_battery),
+            ]
+            if self.origin is not None:
+                streams.append(("position", telemetry.position, apply_global))
+            self._expected_streams = {name for name, _, _ in streams}
+            return [
+                asyncio.ensure_future(follow(name, sub, app))
+                for name, sub, app in streams
+            ]
+
+        self._telemetry_tasks = self._run(launch())
+
+        # Do not hand a caller a state full of zeros. Waiting for the first
+        # sample of every stream here means `state()` is meaningful from the
+        # first call, and a stream that never arrives is caught before arming
+        # rather than halfway through a climb.
+        deadline = time.monotonic() + TELEMETRY_FIRST_SAMPLE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            with self._lock:
+                missing = self._expected_streams - self._seen_streams
+            if not missing:
+                return
+            time.sleep(0.02)
+        raise BackendError(
+            "PX4 never sent these telemetry streams: "
+            + ", ".join(sorted(missing))
+            + ". The link is up but the vehicle is not reporting state."
+        )
 
     def close(self) -> None:
         if self._loop is None:
@@ -141,6 +315,27 @@ class Px4SitlBackend(VehicleBackend):
                 self.stop_offboard()
         except BackendError:
             pass
+        # Cancel *and wait*. Stopping the loop the moment cancel() is called
+        # leaves the tasks mid-teardown and asyncio complains on garbage
+        # collection; the cancellation has to be processed by the loop that
+        # owns them, which means awaiting it on that loop.
+        import asyncio
+
+        async def shutdown(tasks):
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        if self._telemetry_tasks:
+            try:
+                self._run(shutdown(self._telemetry_tasks), timeout_s=5.0)
+            except Exception:
+                pass
+        self._telemetry_tasks = []
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+            self._thread = None
         self._loop.close()
         self._loop = None
         self._drone = None
@@ -222,52 +417,25 @@ class Px4SitlBackend(VehicleBackend):
 
     # ------------------------------------------------------------------
     def poll(self) -> None:
-        """Pull one round of telemetry into the cached state.
+        """Bring the cached state up to date.
 
-        MAVSDK exposes telemetry as async generators. Rather than hold a
-        subscription open per field, this takes one sample of each per call,
-        which suits a synchronous control loop running at a fixed rate.
+        Telemetry arrives continuously on the background loop, so there is
+        nothing to fetch: this only stamps the state with the time it is being
+        read at. It is kept because the control loop reads as it should —
+        poll, then act — and because the backend interface is shared with the
+        reference simulation, where a poll does do work.
         """
         self._require_connection()
-
-        async def first(generator):
-            async for item in generator:
-                return item
-            return None
-
-        position = self._run(first(self._drone.telemetry.position_velocity_ned()))
-        attitude = self._run(first(self._drone.telemetry.attitude_quaternion()))
-        rates = self._run(first(self._drone.telemetry.attitude_angular_velocity_body()))
-        battery = self._run(first(self._drone.telemetry.battery()))
-
-        if position is not None:
-            self._state.position = np.array(
-                [position.position.north_m, position.position.east_m, position.position.down_m]
-            )
-            self._state.velocity = np.array(
-                [position.velocity.north_m_s, position.velocity.east_m_s,
-                 position.velocity.down_m_s]
-            )
-        if attitude is not None:
-            self._state.orientation = np.array([attitude.w, attitude.x, attitude.y, attitude.z])
-        if rates is not None:
-            self._state.angular_velocity = np.array(
-                [rates.roll_rad_s, rates.pitch_rad_s, rates.yaw_rad_s]
-            )
-        if battery is not None:
-            self._battery = BatteryState(
-                voltage_v=battery.voltage_v,
-                remaining=battery.remaining_percent / 100.0,
-                current_a=0.0,
-            )
-        self._last_telemetry_s = time.monotonic()
-        self._state.time_s = time.monotonic()
+        with self._lock:
+            self._state.time_s = time.monotonic()
 
     def state(self) -> VehicleState:
-        return self._state.copy()
+        with self._lock:
+            return self._state.copy()
 
     def battery(self) -> BatteryState:
-        return self._battery
+        with self._lock:
+            return self._battery
 
     def is_connected(self) -> bool:
         return self._connected

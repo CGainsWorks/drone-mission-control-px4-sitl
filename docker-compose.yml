@@ -61,19 +61,36 @@ services:
       - HEADLESS=1
     ports:
       - "14540:14540/udp"
-    command: ["make", "px4_sitl", "gz_x500"]
+    # No command override: the image's own CMD starts PX4 without its
+    # interactive console, and the world and spawn point come from the
+    # Dockerfile's ENV. Overriding it here with `make px4_sitl gz_x500`
+    # re-attaches the console and floods the logs.
 
   # Flies a mission through the same mission-control stack, against PX4.
   # docker compose --profile sitl run --rm sitl-mission
   sitl-mission:
     profiles: ["sitl"]
-    build: .
-    image: mission-control:latest
+    build:
+      context: .
+      # The `sitl` stage adds MAVSDK. Without it this service starts and then
+      # immediately fails on the optional import, which is a confusing way to
+      # discover a missing dependency.
+      target: sitl
+    image: mission-control-sitl:latest
     depends_on:
       - px4
+    # Shares the PX4 container's network namespace, which is not a shortcut but
+    # the only arrangement that works without editing PX4's startup script.
+    # SITL's onboard MAVLink link is configured to send to 127.0.0.1:14540, so a
+    # listener in a *different* namespace never receives anything however many
+    # ports are published. Sharing the namespace makes that loopback address
+    # mean the same thing in both containers.
+    network_mode: "service:px4"
     volumes:
       - ./results:/app/results
     environment:
-      - PX4_ADDRESS=udp://px4:14540
+      # Listens; PX4 connects out to it. Pointing this at the peer by name
+      # would be the wrong direction — the autopilot initiates.
+      - PX4_ADDRESS=udpin://0.0.0.0:14540
     command: ["python", "scripts/run_px4_sitl.py", "--mission",
               "missions/facade_inspection.yaml", "--tracker", "mpc"]
