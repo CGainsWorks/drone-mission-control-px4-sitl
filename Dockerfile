@@ -41,4 +41,4 @@ CMD ["bash", "scripts/run_all.sh"]
 FROM base AS sitl
 # Just the two the backend needs, at the versions requirements-optional.txt
 # pins. Jupyter is in that file too and has no business in a flight container.
-RUN pip install --no-cache-dir "mavsdk>=1.4" "pyulog>=1.0"
+RUN pip install --no-cache-dir "mavsdk==3.10.2" "pyulog==1.2.4"

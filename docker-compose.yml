@@ -1,8 +1,7 @@
 # `docker compose up` runs the whole pipeline and verifies the artifacts.
 #
-# The SITL services are behind a profile so they are not built or pulled unless
-# asked for: the PX4 + Gazebo image is a couple of gigabytes and the headline
-# result does not need it.
+# The SITL services are behind profiles so they are not built unless asked
+# for: the reference comparison does not need them.
 
 services:
   # The default. Tests, comparison, figures, RESULTS.md, verification.
@@ -48,49 +47,71 @@ services:
       - ./config:/app/config
     command: ["python", "scripts/tune_gains.py"]
 
-  # --- PX4 SITL, behind a profile -------------------------------------------
-  # docker compose --profile sitl up px4
+  # --- PX4 SITL, behind profiles --------------------------------------------
+  # The campaign itself is scripts/run_sitl_campaign.py, which starts a fresh
+  # PX4 per flight; these services are for flying one mission by hand.
+  #
+  #   docker compose --profile sitl up -d px4
+  #   docker compose --profile sitl run --rm sitl-mission
+  #   docker compose --profile sitl down
+  #
+  # PX4 v1.17.0 with its SIH physics, headless. network_mode none gives it a
+  # loopback interface and nothing else, so MAVLink's fixed UDP ports cannot
+  # meet another simulator on the same Docker host.
   px4:
     profiles: ["sitl"]
     build:
-      context: ./sitl
-      dockerfile: Dockerfile
-    image: mission-control-px4:latest
+      context: ./sitl/sih
+    image: mission-control-px4-sih:latest
+    network_mode: none
     environment:
-      - PX4_SIM_MODEL=gz_x500
-      - HEADLESS=1
-    ports:
-      - "14540:14540/udp"
-    # No command override: the image's own CMD starts PX4 without its
-    # interactive console, and the world and spawn point come from the
-    # Dockerfile's ENV. Overriding it here with `make px4_sitl gz_x500`
-    # re-attaches the console and floods the logs.
+      # Home at facade_inspection's declared origin.
+      - PX4_HOME_LAT=51.5074
+      - PX4_HOME_LON=-0.1278
+      - PX4_HOME_ALT=12.0
 
-  # Flies a mission through the same mission-control stack, against PX4.
-  # docker compose --profile sitl run --rm sitl-mission
+  # Flies a mission through the mission-control stack against PX4. Shares the
+  # PX4 container's network namespace: PX4's onboard MAVLink link sends to
+  # 127.0.0.1:14540, which is where the flight script's link relay listens.
   sitl-mission:
     profiles: ["sitl"]
     build:
       context: .
-      # The `sitl` stage adds MAVSDK. Without it this service starts and then
-      # immediately fails on the optional import, which is a confusing way to
-      # discover a missing dependency.
       target: sitl
     image: mission-control-sitl:latest
     depends_on:
       - px4
-    # Shares the PX4 container's network namespace, which is not a shortcut but
-    # the only arrangement that works without editing PX4's startup script.
-    # SITL's onboard MAVLink link is configured to send to 127.0.0.1:14540, so a
-    # listener in a *different* namespace never receives anything however many
-    # ports are published. Sharing the namespace makes that loopback address
-    # mean the same thing in both containers.
     network_mode: "service:px4"
-    volumes:
-      - ./results:/app/results
+    command: ["python", "scripts/run_px4_sitl.py", "--mission", "facade_inspection",
+              "--tracker", "mpc", "--output", "/tmp/flight"]
+
+  # PX4 v1.15 with Gazebo, for watching a flight rather than measuring one.
+  # Not used by the campaign or CI. gz-transport is pinned to loopback and its
+  # own partition so it cannot discover other Gazebo instances on the host.
+  #
+  #   docker compose --profile gazebo up -d px4-gazebo
+  #   docker compose --profile gazebo run --rm sitl-mission-gazebo
+  px4-gazebo:
+    profiles: ["gazebo"]
+    build:
+      context: ./sitl
+      dockerfile: gazebo.Dockerfile
+    image: mission-control-px4-gazebo:latest
+    network_mode: none
     environment:
-      # Listens; PX4 connects out to it. Pointing this at the peer by name
-      # would be the wrong direction — the autopilot initiates.
-      - PX4_ADDRESS=udpin://0.0.0.0:14540
-    command: ["python", "scripts/run_px4_sitl.py", "--mission",
-              "missions/facade_inspection.yaml", "--tracker", "mpc"]
+      - PX4_SIM_MODEL=gz_x500
+      - HEADLESS=1
+      - GZ_PARTITION=px4mc
+      - GZ_IP=127.0.0.1
+
+  sitl-mission-gazebo:
+    profiles: ["gazebo"]
+    build:
+      context: .
+      target: sitl
+    image: mission-control-sitl:latest
+    depends_on:
+      - px4-gazebo
+    network_mode: "service:px4-gazebo"
+    command: ["python", "scripts/run_px4_sitl.py", "--mission", "facade_inspection",
+              "--tracker", "mpc", "--airframe", "gz_x500", "--output", "/tmp/flight"]

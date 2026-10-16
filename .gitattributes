@@ -16,5 +16,9 @@
 *.mp4 filter=lfs diff=lfs merge=lfs -text
 *.gif filter=lfs diff=lfs merge=lfs -text
 
+# The SITL campaign's logs are gzip-compressed and committed as ordinary blobs,
+# so a plain clone (and CI, which does not fetch LFS) has them.
+*.gz binary
+
 # Notebooks diff badly by default; treat them as text but do not try to merge.
 *.ipynb text merge=binary

@@ -11,14 +11,15 @@ What this is and is not
 It is a working offboard-control bridge: it connects, waits for a position fix
 and a healthy estimator, arms, engages offboard mode, streams attitude setpoints
 from whichever tracker is running, and lands. ``scripts/run_px4_sitl.py`` drives
-it, and ``sitl/`` brings up PX4 with Gazebo.
+it, and ``sitl/`` brings up PX4 (SIH, or Gazebo for a visual run).
 
-It is **not** where the headline numbers come from, and the README says so. The
-MPC-versus-PID result is generated against the reference simulation because that
-runs deterministically in seconds on any machine, and a result nobody can
-reproduce is not a result. This backend is what demonstrates the architecture is
-real: the mission layer, the trackers and the safety layer are unchanged between
-the two, and only this file knows the difference.
+The 84-run headline comparison is generated against the reference simulation
+because that runs deterministically on any machine. The SITL campaign
+(``scripts/run_sitl_campaign.py``) flies both trackers and the failsafe matrix
+through this backend against PX4 SIH and commits the logs, so the comparison is
+also checked against a real autopilot. The mission layer, the trackers and the
+safety layer are unchanged between the two; only this file knows the
+difference.
 
 Things PX4 will do that catch people out, and which are handled here:
 
@@ -48,8 +49,11 @@ OFFBOARD_TIMEOUT_S = 0.5
 OFFBOARD_PRIME_COUNT = 20
 #: Rate to request for the streams the tracker closes its loop around, Hz.
 TELEMETRY_RATE_HZ = 50.0
-#: Global position only re-anchors the frame; it does not need to be fast.
-POSITION_RATE_HZ = 10.0
+#: Global position is where the position in the mission frame comes from when
+#: the mission declares an origin, so it is the position the tracker closes
+#: its loop around and is requested at the control rate. At 10 Hz it was up to
+#: 100 ms stale, which at survey speed is 0.4 m of error that is not tracking.
+POSITION_RATE_HZ = 50.0
 #: Battery state changes on a timescale of minutes.
 BATTERY_RATE_HZ = 1.0
 #: How long to wait for the first sample of every stream before giving up.
@@ -115,6 +119,16 @@ class Px4SitlBackend(VehicleBackend):
         self._connected = False
         self._last_telemetry_s = 0.0
         self._offboard_active = False
+        self._last_attitude = None
+        self.setpoints_failed = 0
+        # What the autopilot says about itself, for the failsafe matrix and
+        # the flight log: GNSS fix, flight mode, armed and in-air flags.
+        self._gnss_fix_type = 0
+        self._gnss_satellites = 0
+        self._last_gnss_s = 0.0
+        self._flight_mode = "unknown"
+        self._armed = False
+        self._in_air = False
 
     # ------------------------------------------------------------------
     def _run(self, coroutine, timeout_s: float = 30.0):
@@ -249,6 +263,24 @@ class Px4SitlBackend(VehicleBackend):
                 [sample.roll_rad_s, sample.pitch_rad_s, sample.yaw_rad_s]
             )
 
+        def apply_gps(sample) -> None:
+            # MAVSDK's FixType: NO_GPS, NO_FIX, FIX_2D, FIX_3D, FIX_DGPS,
+            # RTK_FLOAT, RTK_FIXED, in that order, which is MAVLink's
+            # GPS_FIX_TYPE numbering. Kept as the integer.
+            self._gnss_fix_type = int(sample.fix_type.value)
+            self._gnss_satellites = int(sample.num_satellites)
+            if self._gnss_fix_type >= 3:
+                self._last_gnss_s = time.monotonic()
+
+        def apply_mode(sample) -> None:
+            self._flight_mode = str(sample.name).lower()
+
+        def apply_armed(sample) -> None:
+            self._armed = bool(sample)
+
+        def apply_in_air(sample) -> None:
+            self._in_air = bool(sample)
+
         def apply_battery(sample) -> None:
             self._battery = BatteryState(
                 voltage_v=sample.voltage_v,
@@ -279,6 +311,10 @@ class Px4SitlBackend(VehicleBackend):
                 ("attitude_quaternion", telemetry.attitude_quaternion, apply_attitude),
                 ("angular_velocity", telemetry.attitude_angular_velocity_body, apply_rates),
                 ("battery", telemetry.battery, apply_battery),
+                ("gps_info", telemetry.gps_info, apply_gps),
+                ("flight_mode", telemetry.flight_mode, apply_mode),
+                ("armed", telemetry.armed, apply_armed),
+                ("in_air", telemetry.in_air, apply_in_air),
             ]
             if self.origin is not None:
                 streams.append(("position", telemetry.position, apply_global))
@@ -363,9 +399,13 @@ class Px4SitlBackend(VehicleBackend):
         # Prime the stream. PX4 rejects the mode change outright if no setpoint
         # has arrived recently, and the resulting error message says nothing
         # about why.
-        level = Attitude(0.0, 0.0, 0.0, 0.0)
+        # Prime with the last command sent, if there was one. On the ground
+        # that is nothing, and level at zero thrust is right; when control is
+        # being taken back in flight after PX4 fell out of offboard, a
+        # zero-thrust setpoint is the last thing the vehicle should receive.
+        prime = self._last_attitude or Attitude(0.0, 0.0, 0.0, 0.0)
         for _ in range(OFFBOARD_PRIME_COUNT):
-            self._run(self._drone.offboard.set_attitude(level))
+            self._run(self._drone.offboard.set_attitude(prime))
             time.sleep(0.02)
 
         try:
@@ -398,11 +438,41 @@ class Px4SitlBackend(VehicleBackend):
         # MAVSDK takes normalised thrust positive-up, which is what the tracker
         # already produces; the body-z sign convention is handled inside PX4.
         thrust = float(np.clip(setpoint.thrust, 0.0, 1.0))
-        self._run(
-            self._drone.offboard.set_attitude(
-                Attitude(float(roll), float(pitch), float(yaw), thrust)
-            )
-        )
+        command = Attitude(float(roll), float(pitch), float(yaw), thrust)
+        self._last_attitude = command
+        try:
+            self._run(self._drone.offboard.set_attitude(command), timeout_s=1.0)
+        except Exception:
+            # MAVSDK reports an error while it considers the system
+            # disconnected. A lost setpoint is what a link loss is; it is the
+            # failsafe matrix's job to react to that, not this call's to stop
+            # the control loop by raising.
+            self.setpoints_failed += 1
+
+    def ensure_offboard(self) -> bool:
+        """Re-engage offboard mode if PX4 has left it. Returns True if it did.
+
+        PX4 leaves offboard on its own when the setpoint stream stops, which is
+        exactly what a link loss does. When the link comes back the mission
+        layer has already decided what to do about it (the matrix latches), so
+        it takes control back and does that, rather than leaving the vehicle
+        in whatever mode PX4 chose as its own fallback.
+        """
+        with self._lock:
+            mode = self._flight_mode
+        if mode == "offboard":
+            return False
+        self._offboard_active = False
+        self.start_offboard()
+        return True
+
+    def set_param(self, name: str, value) -> None:
+        """Set a PX4 parameter over MAVLink. Used to inject faults in SITL."""
+        self._require_connection()
+        if isinstance(value, int) and not isinstance(value, bool):
+            self._run(self._drone.param.set_param_int(name, int(value)), timeout_s=10.0)
+        else:
+            self._run(self._drone.param.set_param_float(name, float(value)), timeout_s=10.0)
 
     def land(self) -> None:
         """Hand the landing back to PX4's own land mode.
@@ -439,6 +509,31 @@ class Px4SitlBackend(VehicleBackend):
 
     def is_connected(self) -> bool:
         return self._connected
+
+    def gnss(self) -> dict:
+        """Latest fix type and satellite count, and seconds since a 3D fix."""
+        with self._lock:
+            age = (time.monotonic() - self._last_gnss_s) if self._last_gnss_s else math.inf
+            return {
+                "fix_type": self._gnss_fix_type,
+                "satellites": self._gnss_satellites,
+                "age_s": age,
+            }
+
+    @property
+    def flight_mode(self) -> str:
+        with self._lock:
+            return self._flight_mode
+
+    @property
+    def armed(self) -> bool:
+        with self._lock:
+            return self._armed
+
+    @property
+    def in_air(self) -> bool:
+        with self._lock:
+            return self._in_air
 
     @property
     def link_silence_s(self) -> float:

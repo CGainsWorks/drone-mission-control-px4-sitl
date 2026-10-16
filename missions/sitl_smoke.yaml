@@ -1,0 +1,65 @@
+# Short mission for the per-push PX4 SITL smoke flight.
+#
+# Not part of the comparison grid. It exists so CI can fly the whole stack
+# against PX4 on every push in a couple of minutes: takeoff, an L-shaped pair
+# of legs with one rounded corner, return and land. Long enough that both
+# trackers, the state machine and the hand-over to PX4's landing are exercised;
+# short enough not to matter on the clock.
+
+name: sitl_smoke
+description: >
+  Takeoff to 10 m, two 20 m legs with a rounded corner, return and land.
+
+origin:
+  latitude: 51.5074
+  longitude: -0.1278
+  altitude: 12.0
+
+defaults:
+  cruise_speed: 4.0
+  acceptance_radius: 1.5
+  yaw_mode: path
+  max_tangential_acceleration: 2.5
+  max_lateral_acceleration: 3.0
+  max_climb_rate: 2.5
+  max_descent_rate: 1.5
+  corner_mode: round
+  corner_radius: 4.0
+
+geofence:
+  polygon_ned:
+    - [-30.0, -30.0]
+    - [-30.0, 40.0]
+    - [40.0, 40.0]
+    - [40.0, -30.0]
+  min_altitude: 3.0
+  max_altitude: 40.0
+  warning_margin: 5.0
+  action: rtl
+
+failsafe:
+  low_battery_remaining: 0.25
+  critical_battery_remaining: 0.12
+  link_loss_timeout_s: 3.0
+  link_loss_critical_s: 15.0
+  gnss_loss_timeout_s: 2.0
+  rtl_altitude: 15.0
+
+items:
+  - type: takeoff
+    altitude: 10.0
+    label: climb
+
+  - type: waypoint
+    north: 20.0
+    east: 0.0
+    altitude: 10.0
+    label: first leg
+  - type: waypoint
+    north: 20.0
+    east: 20.0
+    altitude: 10.0
+    label: second leg
+
+  - type: rtl
+  - type: land

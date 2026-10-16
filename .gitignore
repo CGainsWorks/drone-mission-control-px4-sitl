@@ -2,9 +2,12 @@
 # `python analysis/run_comparison.py`, so none of it belongs in git. The
 # committed outputs are docs/RESULTS.md, docs/FAILSAFE_MATRIX.md,
 # analysis/figures/ and config/tuned_gains.yaml.
-results/
+/results/
 
-# Flight logs, in either format. Pointers live in docs/, the logs do not.
+# Flight logs, in either format. The PX4 SITL campaign's ULogs are committed
+# gzip-compressed (sitl/results/flights/*/px4.ulg.gz), which this does not
+# match: they are the evidence behind docs/SITL_RESULTS.md and the test suite
+# recomputes the committed summary from them.
 *.ulg
 *.ulog
 

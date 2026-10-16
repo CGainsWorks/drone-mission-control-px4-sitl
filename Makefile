@@ -1,7 +1,8 @@
 # Convenience wrappers. Everything here is also a plain docker compose command
 # or a plain python invocation; nothing is hidden behind the Makefile.
 .PHONY: help demo bench quick comparison test tune figures results lag qp estimator \
-        missions local local-test sitl sitl-mission clean
+        missions local local-test sitl sitl-mission sitl-images sitl-smoke sitl-campaign \
+        sitl-results clean
 
 help:
 	@echo "make demo         run everything and verify the artifacts (docker)"
@@ -20,8 +21,11 @@ help:
 	@echo "make estimator    measure what latency compensation is worth"
 	@echo "make missions     validate every mission file"
 	@echo ""
-	@echo "make sitl         bring up PX4 SITL with Gazebo"
-	@echo "make sitl-mission fly a mission against PX4 SITL"
+	@echo "make sitl          bring up PX4 v1.17.0 SIH (headless) in the background"
+	@echo "make sitl-mission  fly facade_inspection against it"
+	@echo "make sitl-smoke    the per-push SITL smoke flight, as CI flies it"
+	@echo "make sitl-campaign every mission by both trackers and every failsafe row"
+	@echo "make sitl-results  rebuild sitl/results/summary.json, docs and README table"
 	@echo "make clean        remove generated results"
 
 demo bench:
@@ -64,10 +68,24 @@ missions:
 	PYTHONPATH=src python scripts/validate_missions.py
 
 sitl:
-	docker compose --profile sitl up px4
+	docker compose --profile sitl up -d px4
 
 sitl-mission:
 	docker compose --profile sitl run --rm sitl-mission
+
+sitl-images:
+	docker build -t mission-control-px4-sih:latest sitl/sih
+	docker build --target sitl -t mission-control-sitl:latest .
+
+sitl-smoke: sitl-images
+	PYTHONPATH=src python scripts/run_sitl_campaign.py --campaign smoke --output results/sitl-smoke
+	PYTHONPATH=src python analysis/make_sitl_results.py --flights results/sitl-smoke --check-only
+
+sitl-campaign: sitl-images
+	PYTHONPATH=src python scripts/run_sitl_campaign.py --campaign full
+
+sitl-results:
+	PYTHONPATH=src python analysis/make_sitl_results.py --check --write-readme
 
 clean:
 	rm -rf results/runs.csv results/comparison_meta.json results/logs

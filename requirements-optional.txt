@@ -2,10 +2,11 @@
 # suite passes without them.
 #
 #   mavsdk   the PX4 SITL backend (src/mission_control/mavlink_bridge/px4.py)
-#   pyulog   cross-checks our ULog writer against the reference implementation
+#   pyulog   reads PX4's ULogs for the SITL analysis, and cross-checks this
+#            repository's ULog writer against the reference implementation
 #   jupyter  runs the notebooks in analysis/notebooks/
 -r requirements.txt
-mavsdk>=1.4
-pyulog>=1.0
+mavsdk==3.10.2
+pyulog==1.2.4
 jupyter>=1.0
 nbconvert>=7.0

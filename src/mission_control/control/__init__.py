@@ -34,7 +34,8 @@ __all__ = [
 TRACKERS = {"pid": PidTracker, "mpc": MpcTracker}
 
 
-def make_tracker(name: str, params, tuned: bool = True, **kwargs) -> TrajectoryTracker:
+def make_tracker(name: str, params, tuned: bool = True, gains_path: str = None,
+                 **kwargs) -> TrajectoryTracker:
     """Construct a tracker by name.
 
     Raises on an unknown name rather than falling back to a default, so a typo
@@ -44,7 +45,8 @@ def make_tracker(name: str, params, tuned: bool = True, **kwargs) -> TrajectoryT
     from ``config/tuned_gains.yaml``. Routing every construction through here is
     what guarantees both controllers in a comparison are running the gains the
     tuning script actually chose, rather than whichever defaults happen to be in
-    the source.
+    the source. ``gains_path`` selects a different gains file, which is how the
+    PX4 SITL campaign uses the gains tuned for its own airframe.
     """
     key = name.lower()
     if key not in TRACKERS:
@@ -55,7 +57,7 @@ def make_tracker(name: str, params, tuned: bool = True, **kwargs) -> TrajectoryT
         from ..tuning import mpc_weights, pid_gains
 
         if cls is PidTracker:
-            return cls(params, gains=pid_gains())
+            return cls(params, gains=pid_gains(gains_path))
         if cls is MpcTracker:
-            return cls(params, weights=mpc_weights())
+            return cls(params, weights=mpc_weights(gains_path))
     return cls(params, **kwargs)
