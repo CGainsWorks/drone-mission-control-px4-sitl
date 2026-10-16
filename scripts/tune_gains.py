@@ -87,6 +87,14 @@ from mission_control.runner import ScenarioConfig, run_scenario  # noqa: E402
 
 CONFIG_PATH = os.path.join(ROOT, "config", "tuned_gains.yaml")
 
+#: The plant tuned against. ``reference`` is the comparison's own airframe and
+#: attitude loop. ``sih`` is a surrogate for PX4 SITL: PX4 SIH's airframe
+#: (mission_control.sitl.sih_quadx_params) with the command delay measured
+#: against PX4 by scripts/identify_px4_lag.py, used to place gains for the SITL
+#: campaign. Each candidate carries its plant, so worker processes need no
+#: shared state.
+REFERENCE_PLANT = {"airframe": "reference", "command_delay_s": 0.0, "lag_tau_s": None}
+
 #: Jerk budget on the acceleration demand, m/s^3 RMS. See the module docstring:
 #: two thirds of the slew rate the attitude loop can actually deliver at its
 #: 220 deg/s rate limit. Applied identically to both controllers.
@@ -146,6 +154,8 @@ def _build_tracker(candidate: dict):
         return lambda p, **kw: PidTracker(p, gains)
 
     weights = MpcWeights(horizon=candidate["horizon"], step_s=candidate["step_s"])
+    if candidate["plant"]["lag_tau_s"] is not None:
+        weights.lag_tau_s = float(candidate["plant"]["lag_tau_s"])
     weights.position_weight = np.asarray(candidate["position_weight"], dtype=float)
     weights.velocity_weight = np.asarray(candidate["velocity_weight"], dtype=float)
     weights.input_rate_weight = np.asarray(candidate["input_rate_weight"], dtype=float)
@@ -173,6 +183,15 @@ class _StepReference:
         return [self.sample(start_s + (i + 1) * step_s) for i in range(count)]
 
 
+def _vehicle(plant: dict):
+    from mission_control import sitl
+    from mission_control.sim import QuadrotorParams
+
+    if plant["airframe"] == "reference":
+        return QuadrotorParams()
+    return sitl.AIRFRAMES[plant["airframe"]]()
+
+
 def step_settling(candidate: dict) -> float:
     """Mean absolute position error over the tail of a step response, m.
 
@@ -180,10 +199,12 @@ def step_settling(candidate: dict) -> float:
     and forty — and it is the check that rejects a candidate which tracks a
     smooth trajectory beautifully and limit-cycles on a discontinuous one.
     """
-    from mission_control.sim import InnerLoop, QuadrotorParams, QuadrotorPlant
+    from mission_control.sim import InnerLoop, QuadrotorPlant
     from mission_control.types import VehicleState
 
-    params = QuadrotorParams()
+    params = _vehicle(candidate["plant"])
+    delay_steps = int(round(candidate["plant"]["command_delay_s"] / 0.02))
+    in_flight = []
     tracker = _build_tracker(candidate)(params)
     start = np.array([0.0, 0.0, -15.0])
     reference = _StepReference(start, start + np.array([STEP_SIZE_M, 0.0, 0.0]))
@@ -200,8 +221,11 @@ def step_settling(candidate: dict) -> float:
     for _ in range(int(STEP_DURATION_S / sim_dt)):
         if time_s + 1e-9 >= next_control:
             next_control += control_dt
-            setpoint = tracker.update(plant.vehicle_state(time_s), reference, time_s,
-                                      control_dt)
+            in_flight.append(tracker.update(plant.vehicle_state(time_s), reference,
+                                            time_s, control_dt))
+            # The command the attitude loop acts on is the one issued
+            # delay_steps control periods ago: the surrogate's transport delay.
+            setpoint = in_flight.pop(0) if len(in_flight) > delay_steps else in_flight[0]
             if time_s > STEP_DURATION_S - 5.0:
                 tail_errors.append(
                     float(np.linalg.norm(plant.state[0:3] - reference.sample(time_s).position))
@@ -234,6 +258,8 @@ def score(candidate: dict) -> tuple:
             seed=spec.seed,
             wind=WIND_CONDITIONS[spec.wind],
             max_duration_s=TRAINING_TIMEOUT_S,
+            vehicle=_vehicle(candidate["plant"]),
+            command_delay_s=candidate["plant"]["command_delay_s"],
             divergence_limit_m=TRAINING_ABANDON_M,
         )
         original = control_registry.TRACKERS[tracker_name]
@@ -311,7 +337,7 @@ def evaluate(candidates: list, workers: int = None, progress=None) -> list:
     return results
 
 
-def tune_pid(quick=False, workers=None) -> dict:
+def tune_pid(quick=False, workers=None, plant=REFERENCE_PLANT) -> dict:
     """Search over closed-loop natural frequency and damping."""
     print("Tuning PID (pole placement over natural frequency and damping)")
 
@@ -322,6 +348,14 @@ def tune_pid(quick=False, workers=None) -> dict:
     # far enough that the best value has worse neighbours on both sides.
     horizontal = [(2.4, 0.8), (3.6, 0.8), (4.8, 0.8), (6.0, 0.8), (4.8, 1.0)]
     vertical = [3.5, 5.0, 6.5]
+    if plant["airframe"] != "reference":
+        # A slower plant: the same shape of grid, moved down so it still
+        # brackets the optimum rather than stopping at its upper edge.
+        # A first pass over 0.8 to 2.4 rad/s ran to its upper edge, so this
+        # one extends far enough to have worse neighbours on both sides.
+        horizontal = [(1.2, 0.8), (1.8, 0.8), (2.4, 0.8), (3.0, 0.8), (3.6, 0.8),
+                      (2.4, 1.0)]
+        vertical = [2.5, 3.5]
     specs = TRAINING[:1] if quick else TRAINING
     if quick:
         horizontal, vertical = horizontal[:2], vertical[:1]
@@ -333,6 +367,7 @@ def tune_pid(quick=False, workers=None) -> dict:
         velocity_z = 2.0 * zeta_z * wn_z
         candidates.append({
             "tracker": "pid",
+            "plant": plant,
             "specs": specs,
             "wn_xy": wn_xy, "zeta_xy": zeta_xy, "wn_z": wn_z, "zeta_z": zeta_z,
             "position_p": [wn_xy**2 / velocity_xy, wn_xy**2 / velocity_xy,
@@ -382,7 +417,7 @@ def tune_pid(quick=False, workers=None) -> dict:
     }
 
 
-def tune_mpc(quick=False, workers=None) -> dict:
+def tune_mpc(quick=False, workers=None, plant=REFERENCE_PLANT) -> dict:
     """Search over horizon, weights and the disturbance gain."""
     print("Tuning MPC (horizon, weights, disturbance gain)")
 
@@ -397,6 +432,15 @@ def tune_mpc(quick=False, workers=None) -> dict:
     position_weights = [30.0, 100.0, 300.0]
     rate_weights = [0.02, 0.10, 0.50]
     disturbance_gains = [4.0, 8.0]
+    if plant["airframe"] != "reference":
+        # Against a plant with a command delay the optimum moves to lighter
+        # position weights and heavier input-rate penalties: a first pass on
+        # the grid above ran to its lowest q_pos and highest r_du. This grid
+        # is centred there instead. One horizon only, since the reference
+        # search showed horizon length does not move the result.
+        horizons = [(20, 0.08)]
+        position_weights = [10.0, 30.0, 60.0]
+        rate_weights = [0.2, 0.5, 2.0]
     specs = TRAINING[:1] if quick else TRAINING
     if quick:
         horizons, position_weights = horizons[:1], position_weights[:1]
@@ -408,6 +452,7 @@ def tune_mpc(quick=False, workers=None) -> dict:
     ):
         candidates.append({
             "tracker": "mpc",
+            "plant": plant,
             "specs": specs,
             "horizon": horizon, "step_s": step, "q_pos": q_pos,
             "r_du": r_du, "disturbance_gain": k_d,
@@ -439,6 +484,8 @@ def tune_mpc(quick=False, workers=None) -> dict:
     horizon, step = chosen["horizon"], chosen["step_s"]
     q_pos, r_du, k_d = chosen["q_pos"], chosen["r_du"], chosen["disturbance_gain"]
     weights = MpcWeights(horizon=horizon, step_s=step)
+    if plant["lag_tau_s"] is not None:
+        weights.lag_tau_s = float(plant["lag_tau_s"])
     weights.position_weight = np.asarray(chosen["position_weight"], dtype=float)
     weights.velocity_weight = np.asarray(chosen["velocity_weight"], dtype=float)
     weights.input_rate_weight = np.asarray(chosen["input_rate_weight"], dtype=float)
@@ -478,14 +525,15 @@ OBJECTIVE_TEXT = (
 )
 
 
-def write_config(pid: dict, mpc: dict) -> str:
+def write_config(pid: dict, mpc: dict, path: str = CONFIG_PATH,
+                 plant: dict = REFERENCE_PLANT) -> str:
     """Write ``config/tuned_gains.yaml``, then read it back to prove it parses.
 
     The read-back is not paranoia. This file is generated prose and numbers, and
     the thing that consumes it is a YAML parser; a generator that emits something
     almost-valid produces a failure a long way from its cause.
     """
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     lines = [
         "# Generated by scripts/tune_gains.py. Do not edit by hand.",
         "#",
@@ -504,6 +552,10 @@ def write_config(pid: dict, mpc: dict) -> str:
         "  objective: >-",
     ]
     lines.extend(f"    {line}" for line in _wrap(OBJECTIVE_TEXT, 72))
+    if plant["airframe"] != "reference":
+        lines.append(f"  airframe: {plant['airframe']}")
+        lines.append(f"  command_delay_s: {plant['command_delay_s']}")
+        lines.append(f"  mpc_lag_tau_s: {plant['lag_tau_s']}")
     lines.append("")
 
     for section, values in (("pid", pid), ("mpc", mpc)):
@@ -515,23 +567,23 @@ def write_config(pid: dict, mpc: dict) -> str:
     # newline="\n" so the file is byte-identical whichever platform generated
     # it: CI regenerates and compares, and a CRLF/LF mismatch would read as a
     # change that nobody made.
-    with open(CONFIG_PATH, "w", encoding="utf-8", newline="\n") as handle:
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(lines))
 
     try:
         import yaml
 
-        with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
+        with open(path, "r", encoding="utf-8") as handle:
             parsed = yaml.safe_load(handle)
     except ImportError:
-        return CONFIG_PATH
+        return path
     for section in ("training", "pid", "mpc"):
         if section not in parsed:
             raise RuntimeError(
-                f"{CONFIG_PATH} was written but parses without a {section!r} "
+                f"{path} was written but parses without a {section!r} "
                 "section; the generator is emitting invalid YAML"
             )
-    return CONFIG_PATH
+    return path
 
 
 def _wrap(text: str, width: int) -> list:
@@ -546,12 +598,25 @@ def main() -> int:
                         help="a much smaller search, for smoke-testing the script")
     parser.add_argument("-j", "--workers", type=int, default=None,
                         help="parallel workers (default: cores - 1)")
+    parser.add_argument("--airframe", default="reference", choices=["reference", "sih"],
+                        help="sih: tune for the PX4 SITL campaign, on a surrogate of "
+                             "PX4 SIH with its measured command delay")
     args = parser.parse_args()
 
+    if args.airframe == "reference":
+        plant, output = REFERENCE_PLANT, CONFIG_PATH
+    else:
+        from mission_control import sitl
+
+        plant = {"airframe": args.airframe,
+                 "command_delay_s": sitl.PX4_SIH_COMMAND_DELAY_S,
+                 "lag_tau_s": sitl.PX4_SIH_COMMAND_DELAY_S + sitl.PX4_SIH_LAG_TAU_S}
+        output = sitl.SIH_GAINS_PATH
+
     started = time.perf_counter()
-    pid = tune_pid(args.quick, args.workers)
-    mpc = tune_mpc(args.quick, args.workers)
-    path = write_config(pid, mpc)
+    pid = tune_pid(args.quick, args.workers, plant)
+    mpc = tune_mpc(args.quick, args.workers, plant)
+    path = write_config(pid, mpc, output, plant)
 
     print(f"wrote {os.path.relpath(path, ROOT)} in {time.perf_counter() - started:.1f} s")
     print()

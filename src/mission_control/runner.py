@@ -91,6 +91,12 @@ class ScenarioConfig:
     #: inside a short mission without waiting for a real discharge.
     battery_drain_scale: float = 1.0
 
+    #: Transport delay between the tracker and the attitude loop, s. Zero for
+    #: the reference comparison. Non-zero for the PX4 surrogate used to tune
+    #: gains for SITL, where MAVLink, MAVSDK and PX4's own estimator put a
+    #: measured delay between a command and its effect (see docs/SITL.md).
+    command_delay_s: float = 0.0
+
     #: Abort the run if position error exceeds this, m. A controller that has
     #: lost the vehicle should stop the run rather than fill the log.
     divergence_limit_m: float = 60.0
@@ -166,6 +172,11 @@ class SimulationRunner:
         self.log = FlightLog()
         self._link_silence_s = 0.0
         self._attitude_setpoint = AttitudeSetpoint(thrust=vehicle.hover_thrust)
+        # Commands in flight to the attitude loop, oldest first, when a
+        # command delay is configured: (time it takes effect, setpoint).
+        self._command_queue = []
+        self._applied_setpoint = self._attitude_setpoint
+        self._last_queued = None
 
     # ------------------------------------------------------------------
     def _system_status(self, time_s: float, estimate: VehicleState,
@@ -309,8 +320,17 @@ class SimulationRunner:
                     break
 
             # --- plant --------------------------------------------------
+            if config.command_delay_s > 0.0:
+                if self._attitude_setpoint is not self._last_queued:
+                    self._last_queued = self._attitude_setpoint
+                    self._command_queue.append(
+                        (time_s + config.command_delay_s, self._attitude_setpoint))
+                while self._command_queue and self._command_queue[0][0] <= time_s + 1e-9:
+                    self._applied_setpoint = self._command_queue.pop(0)[1]
+            else:
+                self._applied_setpoint = self._attitude_setpoint
             command = self.inner_loop.update(
-                self.plant.state[6:10], self.plant.state[10:13], self._attitude_setpoint, dt
+                self.plant.state[6:10], self.plant.state[10:13], self._applied_setpoint, dt
             )
             self.plant.step(command, dt)
             self.battery.step(
