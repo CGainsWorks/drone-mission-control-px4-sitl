@@ -1,21 +1,43 @@
 name: CI
 
+# What runs where, which the README states in the same words:
+#
+#   every push and pull request
+#     test        unit tests, lint and mission validation
+#     docker      the reproduction image builds and its quick pipeline passes
+#     sitl-smoke  PX4 v1.17.0 SIH in a container and one short mission flown
+#                 by the MPC over MAVLink, gated on completing it
+#
+#   weekly (Monday 04:17 UTC) and on manual dispatch
+#     pipeline       the full 84-run reference comparison, regenerated and
+#                    compared with the committed documents
+#     sitl-campaign  the full PX4 SITL campaign: every mission by both trackers
+#                    and every failsafe row, gated on each behaving as specified
+
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-  # The full 84-run reproduction is on a schedule rather than on every push.
-  # See the `pipeline` job.
   schedule:
     - cron: "17 4 * * 1"
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PX4_IMAGE: mission-control-px4-sih:ci
+  FLIGHT_IMAGE: mission-control-sitl:ci
+
 jobs:
-  # Everything that guards correctness. Runs on every push and is the job that
-  # must stay green.
   test:
-    name: Test suite
-    runs-on: ubuntu-latest
+    name: Tests, lint and missions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -24,29 +46,102 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # pyulog lets the suite recompute the committed SITL summary from the
+      # committed ULogs. Ruff is pinned because an unpinned one can fail on a
+      # tree that is clean locally.
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt pyulog==1.2.4 ruff==0.17.1
 
       - name: Run the test suite
         run: python -m pytest -q
         env:
           PYTHONPATH: src
 
+      - name: Ruff
+        run: ruff check src tests analysis scripts
+
+      - name: Validate every shipped mission
+        run: python scripts/validate_missions.py
+        env:
+          PYTHONPATH: src
+
+  # The Docker image is what the README tells people to run first, so it has to
+  # build and the quick pipeline has to pass inside it.
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t mission-control:ci .
+
+      - name: Run the quick pipeline inside it
+        run: |
+          docker run --rm mission-control:ci \
+            bash scripts/run_all.sh --quick --skip-tests
+
+  # One short mission against a real PX4 on every push. The PX4 image is built
+  # from a pinned release and cached, so after the first build this is a cache
+  # restore and about a minute of flight.
+  sitl-smoke:
+    name: PX4 SITL smoke flight (SIH)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build PX4 v1.17.0 SIH (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: sitl/sih
+          load: true
+          tags: ${{ env.PX4_IMAGE }}
+          cache-from: type=gha,scope=px4-sih
+          cache-to: type=gha,scope=px4-sih,mode=max
+
+      - name: Build the flight image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: sitl
+          load: true
+          tags: ${{ env.FLIGHT_IMAGE }}
+          cache-from: type=gha,scope=flight
+          cache-to: type=gha,scope=flight,mode=max
+
+      - name: Install analysis dependencies
+        run: pip install -r requirements.txt pyulog==1.2.4
+
+      - name: Fly the smoke mission
+        run: python scripts/run_sitl_campaign.py --campaign smoke --output results/sitl-smoke
+
+      - name: Flight completed and was logged
+        run: python analysis/make_sitl_results.py --flights results/sitl-smoke --check-only
+
+      - name: Upload the flight
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitl-smoke
+          path: results/sitl-smoke
+          if-no-files-found: warn
+
   # The headline result, end to end, through the same entry point the README
-  # tells a reader to run. Using the documented command rather than a bespoke
-  # sequence is what stops CI drifting away from the instructions.
-  #
-  # Weekly and on request, not on every push. It takes 68 minutes on a two-core
-  # runner — 84 seeded flights plus two notebooks — and it is a reproduction of
-  # a result that is already committed, not a guard against a regression. The
-  # guards are the test suite, the lint, the mission validation and the quick
-  # pipeline inside the Docker image, and those run on every push in about
-  # eleven minutes between them. Paying an hour per commit to re-derive numbers
-  # that cannot have changed unless a test also broke buys nothing, and a job
-  # slow enough to be ignored is worse than no job.
+  # tells a reader to run. Weekly and on request: it takes about an hour on a
+  # hosted runner and reproduces a result that is already committed.
   pipeline:
-    name: Full pipeline and reproducibility
-    runs-on: ubuntu-latest
+    name: Full reference pipeline and reproducibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - uses: actions/checkout@v4
@@ -64,25 +159,12 @@ jobs:
         env:
           PYTHONPATH: src
 
-      # The comparison is deterministic: every generator is seeded and the
-      # results are sorted before writing, so a clean checkout must regenerate
-      # the committed documents unchanged. If this fails, either the committed
-      # documents are stale or something has stopped being reproducible — and
-      # both are worth knowing about.
-      #
-      # This used to be an inline `git diff` over the documents *and* the
-      # figures, and it could never have passed anywhere but the machine that
-      # generated them: matplotlib does not render byte-identical PNGs across
-      # versions, and the compute-cost table is wall-clock. It failed on every
-      # run for that reason, an hour into the job. The script compares what is
-      # actually deterministic and says why it skips the rest.
+      # The flight-derived numbers in docs/RESULTS.md and
+      # docs/FAILSAFE_MATRIX.md must regenerate unchanged. The figures and the
+      # wall-clock timings are excluded; scripts/check_reproducible.py says why.
       - name: Committed results are reproducible
         run: python scripts/check_reproducible.py
 
-      # Notebooks are the classic thing that rots silently: nobody opens them
-      # until someone does, a year later, and cell three throws. They are run
-      # here against the results the step above produced, so a rename or a
-      # changed column breaks the build rather than the reader.
       - name: Notebooks execute against the generated results
         run: |
           pip install nbconvert ipykernel
@@ -107,26 +189,15 @@ jobs:
             docs/RESULTS.md
           if-no-files-found: warn
 
-  # The Docker image is what the README tells people to run first, so it has to
-  # build and the quick pipeline has to pass inside it.
-  docker:
-    name: Docker image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build the image
-        run: docker build -t mission-control:ci .
-
-      - name: Run the quick pipeline inside it
-        run: |
-          docker run --rm mission-control:ci \
-            bash scripts/run_all.sh --quick --skip-tests
-
-  # Style, kept separate so a lint failure never masks a correctness failure.
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
+  # Every mission by both trackers and every failsafe row, against PX4. SITL
+  # runs in real time and is not bit reproducible, so this gates on behaviour
+  # (each flight completes, each fault produces the action its row specifies)
+  # rather than on the committed numbers, and uploads the logs.
+  sitl-campaign:
+    name: Full PX4 SITL campaign (SIH)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - uses: actions/checkout@v4
 
@@ -135,29 +206,40 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install tooling
-        run: pip install ruff
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Ruff
-        run: ruff check src tests analysis scripts
-
-  # The mission files are the one input that comes from outside the software, so
-  # they are validated on their own, with a clear failure message.
-  missions:
-    name: Mission files validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Build PX4 v1.17.0 SIH (cached)
+        uses: docker/build-push-action@v6
         with:
-          python-version: "3.11"
-          cache: pip
+          context: sitl/sih
+          load: true
+          tags: ${{ env.PX4_IMAGE }}
+          cache-from: type=gha,scope=px4-sih
+          cache-to: type=gha,scope=px4-sih,mode=max
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Build the flight image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: sitl
+          load: true
+          tags: ${{ env.FLIGHT_IMAGE }}
+          cache-from: type=gha,scope=flight
+          cache-to: type=gha,scope=flight,mode=max
 
-      - name: Validate every shipped mission
-        run: python scripts/validate_missions.py
-        env:
-          PYTHONPATH: src
+      - name: Install analysis dependencies
+        run: pip install -r requirements.txt pyulog==1.2.4
+
+      - name: Fly the campaign
+        run: python scripts/run_sitl_campaign.py --campaign full --output results/sitl-campaign
+
+      - name: Every flight behaved as specified
+        run: python analysis/make_sitl_results.py --flights results/sitl-campaign --check-only
+
+      - name: Upload the flights
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitl-campaign
+          path: results/sitl-campaign
+          if-no-files-found: warn
