@@ -1,0 +1,12 @@
+vehicle_global_position 200
+vehicle_global_position_groundtruth 200
+vehicle_local_position_groundtruth 200
+vehicle_attitude_groundtruth 200
+vehicle_attitude_setpoint 200
+actuator_motors 200
+vehicle_status 500
+vehicle_land_detected 500
+failsafe_flags 1000
+battery_status 1000
+sensor_gps 1000
+vehicle_command 0

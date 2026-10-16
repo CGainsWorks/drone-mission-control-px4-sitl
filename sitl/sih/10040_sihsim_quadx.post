@@ -1,0 +1,33 @@
+#!/bin/sh
+# Parameters for flying the mission-control stack against PX4 SIH.
+#
+# PX4 sources <airframe>.post after its own defaults and before the logger
+# starts, so every value here is final. Setting them earlier, through the
+# PX4_PARAM_<name> environment hook, does not work for a value equal to the
+# parameter's compiled default: rcS then calls `param set-default` on several
+# of them (SDLOG_MODE, COM_LOW_BAT_ACT), and a set to the old default does not
+# survive that. Measured on v1.17.0: COM_LOW_BAT_ACT ended up at 3, not 0.
+#
+# Each line is here because its default gets in the way of an external
+# trajectory controller or of the failsafe matrix under test.
+
+# No RC transmitter exists in SITL: do not require one or fail over it.
+param set COM_RC_IN_MODE 4
+param set NAV_RCL_ACT 0
+
+# Offboard setpoint stream lost for 1 s: PX4 holds position (5 = Hold). This is
+# the autopilot's half of the link-loss row of the failsafe matrix.
+param set COM_OF_LOSS_T 1.0
+param set COM_OBL_RC_ACT 5
+
+# Ground link silent for 15 s: PX4 returns (2 = Return), matching the matrix's
+# link_loss_critical row and its threshold.
+param set COM_DL_LOSS_T 15
+param set NAV_DLL_ACT 2
+
+# Battery thresholds are the mission's decision, made by the failsafe matrix
+# above PX4. PX4 only warns (0 = Warning).
+param set COM_LOW_BAT_ACT 0
+
+# One ULog per flight, from arming to disarming.
+param set SDLOG_MODE 0

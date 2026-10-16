@@ -1,9 +1,10 @@
-# PX4 SITL with Gazebo, headless, exposing MAVLink on UDP 14540.
+# PX4 v1.15 SITL with Gazebo, headless, for watching a flight. The measured
+# SITL results come from the SIH image in sih/, not from this one.
 #
 # Separate from the repository's main image on purpose: this is a large
 # toolchain that the reproducible result does not need. Keeping it behind a
 # compose profile means `docker compose up` stays a two-minute operation.
-FROM px4io/px4-dev-simulation-jammy:latest
+FROM px4io/px4-dev-simulation-jammy:2024-05-18
 
 ARG PX4_VERSION=v1.15.0
 
