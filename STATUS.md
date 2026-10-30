@@ -1,57 +1,67 @@
 # Status
 
-Against the build checklist in the README.
+_As of 2026-10-30._
 
-| Item | State | Where |
-| --- | :---: | --- |
-| PX4 SITL running with a Gazebo world | built, flown | [`sitl/`](sitl/) |
-| MAVLink connection, arm, takeoff and land under script control | built, flown | [`scripts/run_px4_sitl.py`](scripts/run_px4_sitl.py), [`src/mission_control/mavlink_bridge/px4.py`](src/mission_control/mavlink_bridge/px4.py) |
-| Mission definition schema and loader | built | [`src/mission_control/mission/schema.py`](src/mission_control/mission/schema.py), [`docs/MISSION_SCHEMA.md`](docs/MISSION_SCHEMA.md) |
-| Mission state machine executing a waypoint sequence | built | [`src/mission_control/mission/state_machine.py`](src/mission_control/mission/state_machine.py) |
-| EKF state estimator with RTK and IMU inputs | built | [`src/mission_control/estimation/`](src/mission_control/estimation/), [`docs/ESTIMATOR.md`](docs/ESTIMATOR.md) |
-| PID trajectory tracker | built | [`src/mission_control/control/pid_tracker.py`](src/mission_control/control/pid_tracker.py) |
-| MPC trajectory tracker | built | [`src/mission_control/control/mpc_tracker.py`](src/mission_control/control/mpc_tracker.py) |
-| Identical-mission comparison run with error metrics | built | [`docs/RESULTS.md`](docs/RESULTS.md) |
-| Geofence enforcement | built | [`src/mission_control/safety/geofence.py`](src/mission_control/safety/geofence.py) |
-| Failsafe matrix: link loss, low battery, GNSS loss, geofence breach | built | [`docs/FAILSAFE_MATRIX.md`](docs/FAILSAFE_MATRIX.md) |
-| ULog analysis notebooks | built | [`analysis/notebooks/`](analysis/notebooks/) |
+Everything here runs on a normal PC and in CI. Every number is simulated: the
+reference comparison comes from this repository's own 6-DOF simulation and the
+PX4 numbers from PX4 v1.17.0 software-in-the-loop with its SIH model. Nothing
+has flown on hardware.
 
-## Definition of done
+## Complete
 
-| Criterion | State |
-| --- | :---: |
-| The whole thing runs from one command on a clean machine | `docker compose up` |
-| The README opens with a diagram or a figure, not a wall of text | yes |
-| Every number quoted in the README is reproducible from a script | yes |
-| Limitations are stated honestly in their own section | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
-| A licence is declared | MIT |
-| Large binaries live in Releases or LFS, not in Git history | nothing large; LFS rules in `.gitattributes` |
-| The repository URL is added to the matching CV bullet | pending |
+| Item | Where | Evidence |
+| --- | --- | --- |
+| Mission schema, strict validation and loader | [`mission/schema.py`](src/mission_control/mission/schema.py), [`docs/MISSION_SCHEMA.md`](docs/MISSION_SCHEMA.md) | unit tests; every shipped mission validated in CI |
+| Mission state machine | [`mission/state_machine.py`](src/mission_control/mission/state_machine.py) | unit tests; every reference and SITL flight |
+| 15-state error-state EKF with RTK-GNSS and IMU, delayed fusion horizon | [`estimation/`](src/mission_control/estimation/), [`docs/ESTIMATOR.md`](docs/ESTIMATOR.md) | unit tests; `scripts/benchmark_estimator.py` |
+| PID and MPC trajectory trackers, projected-Newton QP | [`control/`](src/mission_control/control/), [`docs/CONTROLLERS.md`](docs/CONTROLLERS.md) | unit tests; `scripts/benchmark_qp.py` |
+| Reference comparison: 84 paired runs, tuned and held-out scenarios | [`docs/RESULTS.md`](docs/RESULTS.md) | regenerated weekly in CI and compared with the committed document |
+| Predictive geofence and table-driven failsafe matrix | [`safety/`](src/mission_control/safety/), [`docs/FAILSAFE_MATRIX.md`](docs/FAILSAFE_MATRIX.md) | every row flown with its fault in the reference simulation |
+| PX4 SITL, headless, from a pinned release | [`sitl/sih/`](sitl/sih/): PX4 v1.17.0, `px4_sitl_nolockstep`, SIH quadrotor | built and flown in CI on every push |
+| MAVLink offboard control: arm, takeoff, survey, hand the landing to PX4 | [`mavlink_bridge/px4.py`](src/mission_control/mavlink_bridge/px4.py), MAVSDK 3.10.2 | per-push smoke flight; weekly campaign |
+| PX4 SITL campaign: every survey mission by both trackers | [`docs/SITL_RESULTS.md`](docs/SITL_RESULTS.md), [`sitl/results/`](sitl/results/) | ULogs and loop logs committed; the suite recomputes the summary from them |
+| Failsafe rows flown against PX4: link loss, low battery, GNSS loss, geofence breach | [`sitl.py`](src/mission_control/sitl.py), [`mavlink_bridge/link_proxy.py`](src/mission_control/mavlink_bridge/link_proxy.py) | each produces the action its row specifies, gated weekly in CI |
+| Gains for PX4 SIH, tuned by the reference procedure on a delayed surrogate | [`config/tuned_gains_px4_sih.yaml`](config/tuned_gains_px4_sih.yaml), `scripts/tune_gains.py --airframe sih` | command delay and lag measured from SITL by `scripts/identify_px4_lag.py` |
+| README numbers checked against their sources | [`scripts/check_readme.py`](scripts/check_readme.py) | every push |
+| ULog writer and analysis notebooks | [`logs/`](src/mission_control/logs/), [`analysis/notebooks/`](analysis/notebooks/) | unit tests; notebooks executed weekly in CI |
 
-## Numbers, and where each comes from
+**Tests:** 249, all passing locally (`python -m pytest`), run on every push.
 
-Nothing in the README or the docs is typed in by hand. Each is regenerated by a
-command:
+## What CI runs
 
-| Claim | Command |
-| --- | --- |
-| The whole comparison | `bash scripts/run_all.sh` |
-| Tuned gains, and the sweep behind them | `python scripts/tune_gains.py` |
-| The MPC's actuator lag constant | `python scripts/identify_lag.py` |
-| QP solver accuracy and cost | `python scripts/benchmark_qp.py` |
-| What latency compensation is worth | `python scripts/benchmark_estimator.py` |
-| Every mission file is valid and fits its fence | `python scripts/validate_missions.py` |
+| When | Job | What it proves |
+| --- | --- | --- |
+| every push | Tests, lint, missions and README numbers | the suite, ruff, mission validation, README against `docs/RESULTS.md` and `sitl/results/summary.json` |
+| every push | Docker image | the reproduction image builds and its quick pipeline passes |
+| every push | PX4 SITL smoke flight | PX4 v1.17.0 SIH flies `sitl_smoke` with the MPC over MAVLink, end to end |
+| weekly and on dispatch | Full reference pipeline | the 84 runs regenerate `docs/RESULTS.md` and `docs/FAILSAFE_MATRIX.md` unchanged |
+| weekly and on dispatch | Full PX4 SITL campaign | every flight completes within the tracking gate and every fault gives its specified action |
 
-## Known gaps
+## In progress
 
-These are deliberate and are argued in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md):
+Nothing.
 
-- The headline comparison runs against the reference simulation, not PX4 SITL.
-  The SITL path has been flown end to end — the full facade mission against
-  PX4 v1.15 with Gazebo, 0.03–0.52 m tracking error, no failsafe — but it is
-  one run in still air, not a measurement, and the reason the numbers come from
-  elsewhere is reproducibility. See [`sitl/README.md`](sitl/README.md).
-- The estimator has no magnetometer, so yaw is weakly observable.
-- The MPC's constraint set is a box on per-axis acceleration rather than a cone
-  on total tilt.
-- RTL has no obstacle awareness.
+## Not started
+
+- Payload and gimbal: triggering, image geotagging, an inspection deliverable.
+- Magnetometer fusion in the reference estimator.
+- The permanent link loss, critical battery, degraded RTK and predicted-breach
+  rows against PX4 (they are flown in the reference simulation only).
+
+## Limitations
+
+- **No hardware.** Real flight would need an airframe, a flight controller and
+  the steps in [`docs/CAA_NOTES.md`](docs/CAA_NOTES.md). Nothing here claims
+  otherwise.
+- **The PX4 comparison is thin.** One flight per mission and tracker, in still
+  air (SIH has no wind), with gains tuned on a surrogate of PX4 rather than on
+  PX4 itself. The statistical comparison is the reference one.
+- **SITL is not bit reproducible.** It runs on the wall clock. The weekly job
+  gates on behaviour and the committed numbers are from one campaign run on a
+  GitHub-hosted runner.
+- **The geofence breach against PX4 is injected by moving the fence**, not by
+  blowing the vehicle across it, because SIH has no wind.
+- **The Gazebo image is not exercised.** `sitl/gazebo.Dockerfile` (PX4 v1.15)
+  is kept for watching a flight; no committed number comes from it.
+- The full list, with what each costs, is in
+  [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).

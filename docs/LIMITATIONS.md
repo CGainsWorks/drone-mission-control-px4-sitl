@@ -4,39 +4,70 @@ What this repository does not do, does not model, or models in a way that would
 not survive contact with a real aircraft. Written plainly, because a portfolio
 project that only lists its strengths is not evidence of engineering judgement.
 
-## The headline result comes from a simulation, not from PX4 SITL
+## Everything is simulated
 
-The MPC-versus-PID comparison runs against the reference plant in
-`src/mission_control/sim/`, not against PX4 with Gazebo. That is a deliberate
-trade and it is the most important caveat here.
+Nothing in this repository has flown. There are two simulations and every
+number comes from one of them.
 
-**Why:** the reference simulation is deterministic, runs the full scenario grid
-in a few minutes on any machine, and needs no toolchain. A benchmark that
-requires a two-gigabyte PX4 build and produces a different answer every run is
-not one anybody will check.
+**The headline comparison** (84 runs, `docs/RESULTS.md`) runs against the
+reference plant in `src/mission_control/sim/`. It is deterministic, runs the
+whole grid on any machine and needs no toolchain, which is why it carries the
+statistics. The plant is a 6-DOF rigid body with rotor lag, quadratic drag and
+a wind model. It does not model aerodynamic interaction between rotors, ground
+effect, vortex ring state in fast descents, structural flexibility, airframe
+vibration coupling into the IMU or ESC nonlinearity.
 
-**What it costs:** the plant is a 6-DOF rigid body with rotor lag, quadratic
-drag and a wind model. It does not model aerodynamic interaction between rotors,
-ground effect, vortex ring state in fast descents, structural flexibility,
-airframe vibration coupling into the IMU, or ESC nonlinearity. Gazebo models
-some of these; a real aircraft has all of them.
+**The PX4 campaign** (`docs/SITL_RESULTS.md`) flies the same stack over MAVLink
+against PX4 v1.17.0 with PX4's SIH model. That adds a real autopilot: PX4's
+attitude and rate loops, its EKF2, its failsafe state machine and a real
+MAVLink link with real latency. SIH itself is simpler than the reference
+plant: a rigid body with linear drag and **no wind model**, so every SITL
+flight is in still air.
 
-**What that means for the numbers:** the *ranking* of the two controllers is
-robust — the mechanism by which the MPC wins is preview, which does not depend
-on any of the above. The *magnitudes* are optimistic for both controllers, and
-by an unquantified amount. Do not read the absolute RMS figures as what either
-controller would achieve on a real aircraft.
+**What that means for the numbers:** the *ranking* in the reference comparison
+is robust, because the mechanism by which the MPC wins is preview, which does
+not depend on any of the above. The *magnitudes* are optimistic for both
+controllers, by an unquantified amount. Do not read either set of RMS figures
+as what a controller would achieve on an aircraft.
 
-`sitl/` and `scripts/run_px4_sitl.py` exist and work; they demonstrate the
-architecture is backend-agnostic. They are not the source of the numbers.
+## The PX4 campaign is thin
+
+- **One flight per mission and tracker.** SITL runs in real time and is not
+  bit reproducible, so each number is a single sample. The statistical
+  comparison is the reference one.
+- **Gains tuned on a surrogate.** Both trackers' SITL gains come from the
+  reference tuning procedure run on the reference simulation with SIH's
+  airframe and PX4's measured command delay (`scripts/tune_gains.py --airframe
+  sih`), not from tuning against PX4 itself. A first-order lag plus a delay is
+  a coarse model of PX4's attitude loop, MAVLink and EKF2 together.
+- **The geofence breach is injected by moving the fence.** The reference
+  simulation forces a real breach with a wind the airframe cannot hold
+  against; SIH has no wind and the predictive fence stops the vehicle before
+  any boundary it can see coming. So the SITL row tightens the fence in flight
+  to a square the vehicle is already outside, which is how an airspace
+  restriction arriving mid-flight would look and tests the breach rule and the
+  return. It does not test a vehicle being blown across a boundary.
+- **Not every row is flown against PX4.** Link loss, low battery, GNSS loss and
+  geofence breach are. The permanent link loss, critical battery, degraded RTK
+  and predicted-breach rows are flown only in the reference simulation.
+- **The simulation runs on the wall clock.** PX4 is built nolockstep so that
+  an external real-time controller and the simulated vehicle agree about time.
+  The price is that a busy host can stall the simulator, which PX4 reports as a
+  sensor timeout and which degrades its EKF. Stalled flights are detected from
+  the ULog and re-flown and the committed flights were all flown on a
+  GitHub-hosted runner, where none stalled; on the shared development machine
+  most flights did.
+- **The Gazebo image is not exercised.** `sitl/gazebo.Dockerfile` (PX4 v1.15
+  with Gazebo) is kept for watching a flight. No committed number comes from
+  it and CI does not build it.
 
 ## The estimator
 
 - **No magnetometer, no vision, no optical flow, no barometer.** GNSS and IMU
   only. That makes yaw weakly observable — it converges only through
-  acceleration, and the tests hold it to 6 degrees rather than the 1 degree that
+  acceleration and the tests hold it to 6 degrees rather than the 1 degree that
   roll and pitch achieve. A real inspection aircraft would carry at least a
-  magnetometer, and near a steel structure would have to cope with it being
+  magnetometer and near a steel structure would have to cope with it being
   wrong.
 - **GNSS is modelled, not replayed.** The receiver model reproduces the three
   behaviours that matter (fix-dependent accuracy, slowly correlated error,
@@ -51,7 +82,7 @@ architecture is backend-agnostic. They are not the source of the numbers.
 ## The controllers
 
 - **The MPC's axes are decoupled.** Its constraint set is a box on per-axis
-  acceleration, but the vehicle's real constraint is a cone on total tilt. The
+  acceleration but the vehicle's real constraint is a cone on total tilt. The
   tilt limit is applied afterwards, shared with the PID, so neither controller
   is advantaged — but the MPC is solving a slightly wrong problem and could do
   better with a proper second-order cone constraint.
@@ -73,7 +104,7 @@ architecture is backend-agnostic. They are not the source of the numbers.
   typically needs all three.
 - **RTL does not avoid anything.** It climbs, transits straight home and
   descends. It has no map and no sensor with which to notice the structure it
-  has just been inspecting. This is the same behaviour PX4 ships with, and it is
+  has just been inspecting. This is the same behaviour PX4 ships with and it is
   the reason RTL altitudes are set conservatively in practice.
 - **The failsafe matrix trusts its inputs.** A rule fires on the state it is
   given; there is no cross-checking of one sensor against another. A GNSS
@@ -94,8 +125,14 @@ architecture is backend-agnostic. They are not the source of the numbers.
 
 ## Reproducibility
 
-- Results are deterministic given a seed, and CI checks that regenerating them
-  on a clean checkout leaves the tree unchanged.
+- Reference results are deterministic given a seed. The weekly CI run checks
+  that regenerating `docs/RESULTS.md` and `docs/FAILSAFE_MATRIX.md` on a clean
+  checkout leaves them unchanged; the per-push run checks that every number the
+  README quotes matches those committed documents.
+- PX4 SITL results are not bit reproducible: SITL runs against the wall clock
+  and MAVLink timing varies. The weekly CI run re-flies the campaign and gates
+  on behaviour (every flight completes within the tracking gate, every fault
+  produces its specified action), not on the committed numbers.
 - The figures depend on matplotlib's default styling, so a major matplotlib
   version change may alter them cosmetically without changing any number.
 - Timing figures (`mean_solve_time_us` and friends) are the one thing that is

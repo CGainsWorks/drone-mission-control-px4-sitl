@@ -1,135 +1,146 @@
 # PX4 SITL
 
-This directory brings up PX4 software-in-the-loop with Gazebo, so the mission
-control stack can be flown against a real autopilot rather than the reference
-simulation in `src/mission_control/sim/`.
+This directory brings up PX4 software-in-the-loop so the mission-control stack
+can be flown against a real autopilot rather than the reference simulation in
+`src/mission_control/sim/`. Everything flown here is **simulated**: PX4's own
+SIH physics model, not an aircraft.
 
-## What this is for, and what it is not
+| Path | What it is |
+| --- | --- |
+| `sih/Dockerfile` | PX4 **v1.17.0**, built from the release tag in the PX4 project's own build container (`px4io/px4-dev:v1.17.0`), `px4_sitl_nolockstep` target, SIH quadrotor (airframe 10040). About 200 MB. Used by the campaign and by CI. |
+| `sih/10040_sihsim_quadx.post` | The PX4 parameters this project flies with and why each one is there |
+| `sih/logger_topics.txt` | A short ULog topic list, so a whole flight's log is a few hundred kilobytes |
+| `gazebo.Dockerfile` | PX4 v1.15 with Gazebo and the `gz_x500`, for watching a flight. Not used for any committed result and not run in CI. |
+| `worlds/inspection.sdf`, `params/offboard.params` | The Gazebo world and parameter file for that image |
+| `results/` | The committed campaign: one directory per flight and `summary.json` |
 
-The **headline MPC-versus-PID result does not come from here.** It comes from
-the reference simulation, for one reason: that runs deterministically, in
-minutes, on any machine, with no toolchain — and a result nobody can reproduce
-is not a result. See [`../docs/LIMITATIONS.md`](../docs/LIMITATIONS.md) for what
-that simplification costs.
+## What is flown
 
-What this *is* for is demonstrating that the layer above the simulation was not
-written around it. The mission state machine, the trajectory generator, both
-trackers, the geofence and the failsafe matrix are all unchanged between the
-two; only `src/mission_control/mavlink_bridge/px4.py` knows the difference.
+`scripts/run_sitl_campaign.py` starts a fresh PX4 container per flight, with its
+home set to the mission's declared origin and runs `scripts/run_px4_sitl.py` in
+a second container that shares PX4's network namespace. That script is the same
+mission state machine, trajectory generator, trackers, geofence and failsafe
+matrix as the reference simulation; only `mavlink_bridge/px4.py` differs. It
+streams attitude setpoints over MAVLink (MAVSDK 3.10.2) at 50 Hz in offboard
+mode and hands the final landing to PX4.
+
+The full campaign is every survey mission (`facade_inspection`,
+`corridor_survey`, `tower_orbit`) flown by both trackers, plus one flight per
+failsafe row with a real fault injected on the first leg:
+
+| Fault | How it is injected |
+| --- | --- |
+| link loss | a UDP relay in the MAVLink path (`mavlink_bridge/link_proxy.py`) drops every datagram, both ways, for 6 s |
+| low battery | PX4's battery simulator is allowed to drain to 15% (`SIM_BAT_MIN_PCT`) |
+| GNSS loss | PX4's simulated receiver is told it sees no satellites (`SIM_GPS_USED 0`) |
+| geofence breach | the mission fence is tightened in flight to a square the vehicle is already outside |
+
+PX4's own ULog for each flight, gzip-compressed and the flight script's 50 Hz
+loop log are committed under `results/flights/`.
+`analysis/make_sitl_results.py` turns them into `results/summary.json`,
+[`../docs/SITL_RESULTS.md`](../docs/SITL_RESULTS.md), the figure
+`analysis/figures/sitl_tracking.png` and the SITL table in the README. Errors
+are measured against SIH's ground truth from the ULog, with the same
+`tracking_metrics` the reference comparison uses.
 
 ## Running it
 
-With Docker, which is the least painful route:
-
 ```bash
-docker compose --profile sitl up px4
+make sitl-images      # builds both images; the PX4 build takes a few minutes
+make sitl-smoke       # one short flight, exactly as CI flies it on every push
+make sitl-campaign    # the full campaign, about 25 minutes in real time
+make sitl-results     # summary, document, figure and README table
 ```
 
-Then, in another terminal:
+or by hand, one flight at a time:
 
 ```bash
+docker compose --profile sitl up -d px4
 docker compose --profile sitl run --rm sitl-mission
+docker compose --profile sitl down
 ```
 
-Without Docker, if you already have a PX4 source tree:
+## Isolation
 
-```bash
-cd /path/to/PX4-Autopilot
-make px4_sitl gz_x500
-```
+PX4 SITL uses fixed UDP ports (MAVLink 14540, 14550 and 18570). The PX4
+container runs with `--network none`, so it has a loopback interface and
+nothing else and the flight container joins that namespace. Nothing on the
+Docker host can reach those ports and they cannot meet another simulator's. The
+Gazebo profile also pins gz-transport to loopback and its own partition
+(`GZ_IP=127.0.0.1`, `GZ_PARTITION=px4mc`).
 
-and then, from this repository:
+## Gains for this airframe
 
-```bash
-pip install -r requirements-optional.txt
-python scripts/run_px4_sitl.py --mission missions/facade_inspection.yaml --tracker mpc
-```
+The reference comparison's gains were tuned for the reference airframe and its
+attitude loop, which responds to an acceleration demand as a 0.13 s first-order
+lag with no delay. Against PX4 the path is longer: `scripts/identify_px4_lag.py`
+fits a **0.16 s delay and a 0.18 s lag** from a facade flight on a
+GitHub-hosted runner (MAVLink and MAVSDK, PX4's attitude loop and PX4's
+estimator on the way back) and other clean flights give 0.12 to 0.16 s and
+0.16 to 0.22 s.
+
+With the reference gains unchanged (`results/transfer/`, flown by the weekly
+job), both trackers fly the facade survey but neither stays inside the
+25 m/s³ jerk budget both were tuned to. The PID's demand runs at 41.5 m/s³
+RMS and sits at an acceleration limit for 39% of the survey, a limit cycle
+between its bounds and the MPC's at 36.2 m/s³. Their position errors
+(0.73 m and 0.42 m RMS) are not a comparison worth quoting, because one
+of the two constraints that make the tuning objective well posed is broken for
+both.
+
+So the campaign does not use those gains. `scripts/tune_gains.py --airframe sih`
+re-tunes **both** trackers with the reference comparison's own procedure,
+objective and constraints, on a surrogate of PX4 SIH: the reference simulation
+with SIH's airframe (`mission_control.sitl.sih_quadx_params`) and the measured
+delay on every attitude command. The result is
+`config/tuned_gains_px4_sih.yaml` and it is what every committed campaign
+flight used. The MPC's internal lag constant is set to the measured delay plus
+lag, 0.34 s, the same way the reference MPC's 0.13 s was measured rather than
+guessed.
+
+## Simulator stalls
+
+The nolockstep build runs SIH on the wall clock, so if the host stops
+scheduling PX4 for long enough, PX4's sensor monitor reports a simulated
+accelerometer as timed out (`[sensors] Accel #0 fail: TIMEOUT!`) and EKF2
+degrades. On the shared development machine this happened in most flights
+and produced what looked like estimator divergence, including an earlier
+reading of the reference-gain PID flight as having dragged PX4's EKF tens of
+metres off. On a GitHub-hosted runner it did not happen at all. The campaign
+reads PX4's own error messages from every ULog, re-flies a stalled flight up to
+three times, records each attempt in `attempts.json` and the results gate
+rejects any flight that still shows one. Every committed flight was flown on a
+GitHub-hosted runner by the weekly campaign job, run on manual dispatch, and
+none needed a second attempt.
 
 ## Things that will catch you out
 
-**Offboard mode will not engage until setpoints are already streaming.** PX4
-rejects the mode change if it has not seen a recent setpoint, and the rejection
-message does not explain why. The backend primes the stream with twenty
-setpoints before requesting the mode; if you write your own, do the same.
+**Lockstep.** PX4's default SITL build runs on simulation time, which SIH
+advances in fixed steps and then sleeps. The sleeps overshoot and simulation
+time ran at 0.944 of wall-clock time here. A controller in another process on
+wall-clock time then disagrees with the vehicle about how long a second is by
+over 5%. The image builds `px4_sitl_nolockstep`, which runs on the real clock.
 
-**Offboard mode drops out if the stream stalls** for more than about half a
-second. On a laptop also running Gazebo, a garbage collection pause is enough.
-The vehicle reverts to hold, which is safe and confusing.
+**Parameters equal to their default.** PX4 v1.17 has a `PX4_PARAM_<name>`
+environment hook but `rcS` later calls `param set-default` on several
+parameters and a value set through the hook that equals the compiled default
+does not survive it: `COM_LOW_BAT_ACT` ended up at 3 instead of 0. The
+parameters therefore live in the airframe's `.post` file, which runs after
+PX4's defaults.
 
-**The simulated airframe is not this repository's airframe.** `gz_x500` is
-2.06 kg with a thrust-to-weight ratio of 1.69, against 1.6 kg and 2.17 for the
-reference airframe. The tracker turns an acceleration demand into a normalised
-collective through exactly those two numbers, so it is wrong from the first
-sample unless told. `scripts/run_px4_sitl.py` passes the x500's own parameters,
-read out of PX4's `x500_base/model.sdf`. This is the calibration step a real
-deployment needs, and it is why the reproducible result uses a plant whose
-parameters are known exactly.
+**Offboard mode will not engage until setpoints are already streaming**, and
+drops out if the stream stalls for `COM_OF_LOSS_T`. The backend primes the
+stream and after a link loss re-engages offboard priming with the last
+command rather than a zero-thrust one.
 
-**PX4's throttle is not linear in thrust, and by default it does not pretend to
-be.** A rotor's thrust goes as the square of its speed, and the gz x500 is
-exactly quadratic. Hover is 0.59 of full thrust but 0.77 of full *command*. A
-controller that computes a normalised thrust — which is what a controller
-should compute — asks for 0.59, gets 0.35 of the available force, and sits on
-the ground at what looks like a sensible throttle while tilting towards its
-first waypoint. `params/offboard.params` sets `THR_MDL_FAC 1.0`, which makes
-PX4 invert the curve so a thrust demand means thrust. Nothing flies without it.
+**Do not fetch telemetry per control iteration.** MAVSDK's telemetry is async
+generators; opening one per read waits for the *next* message. The backend
+holds every subscription open on a background event loop.
 
-**Do not fetch telemetry per control iteration.** MAVSDK exposes telemetry as
-async generators, and opening one, taking a single item and dropping it reads
-exactly like a synchronous getter. It is not: each new subscription waits for
-the *next* message. Measured here, that cost 2.0 seconds per iteration — a
-0.5 Hz control loop closed around two-second-old state, which oscillates with a
-ten-second period and tens of metres of amplitude regardless of which tracker
-is running or how it is tuned. The backend holds its subscriptions open on a
-background event loop; the same loop then closes at 50 Hz.
+**Global position at the control rate.** The mission frame comes from PX4's
+global position, so that stream is requested at 50 Hz. At its default rate it
+was up to 100 ms stale, which at survey speed is 0.4 m that is not tracking.
 
-**Arming needs a home position.** In SITL the simulated GPS takes a few seconds
-to lock. The backend waits for `is_global_position_ok` and
-`is_home_position_ok` rather than arming into a rejection.
-
-**A crashed vehicle stays unarmable.** PX4's failure detector latches
-`fd_critical_failure` when the vehicle tumbles, and it is not cleared by
-disarming — only by rebooting the autopilot. After a run that ends badly,
-restart the container rather than wondering why arming is refused.
-
-## What has actually been flown
-
-`missions/facade_inspection.yaml` has been flown end to end against PX4 v1.15
-with Gazebo Garden, headless, in the image this directory builds, by both
-trackers: takeoff to 18 m, the four facade legs at 18 m and 24 m, the 18 m
-orbit at 20 m, RTL at 35 m, and the landing handed back to PX4. No failsafe
-triggered in either run. Reported tracking error against the reference:
-
-| Tracker | Range over the run |
-| --- | --- |
-| MPC | 0.01–0.33 m |
-| PID | 0.23–4.15 m |
-
-**Those two numbers are not a result and must not be quoted as one.** They are
-one run each, in still air, on an unloaded machine, with per-sample error read
-off a progress line rather than integrated — and the gains both trackers are
-using were tuned against the reference airframe, not this one. They are here to
-show the stack flies a real autopilot and that neither controller falls over
-doing it. The measured comparison, with paired scenarios, held-out missions and
-a significance test, is in [`../docs/RESULTS.md`](../docs/RESULTS.md).
-
-## Files
-
-| File | What it is |
-| --- | --- |
-| `Dockerfile` | PX4 v1.15 with Gazebo, headless, exposing MAVLink on UDP 14540 |
-| `worlds/inspection.sdf` | A Gazebo world with a structure to inspect, matching `missions/facade_inspection.yaml` |
-| `params/offboard.params` | PX4 parameters that make offboard control behave predictably; installed as `px4-rc.params`, which is the only name PX4's `rcS` sources |
-
-## Building it
-
-The image takes about five minutes and lands around 4 GB. Two things in the
-Dockerfile are load-bearing and both are commented there:
-
-- `--shallow-submodules` on the clone. `--depth 1` alone applies only to the
-  superproject, and PX4 has 36 submodules; without it the clone was still
-  running after nine hours, against 98 seconds with it.
-- A tag-only fetch in the NuttX submodule afterwards. PX4's version-header
-  generator indexes the last element of a list of NuttX tags, and a shallow
-  submodule has none, so the build stops at step 52 of 985 with an `IndexError`
-  that says nothing about submodules.
+**SIH is not Gazebo.** No wind model, a linear drag of 1 N per m/s, a 1 kg
+quadrotor with a thrust-to-weight ratio of 2.04. Its numbers are not the
+reference simulation's and neither set is an aircraft's.

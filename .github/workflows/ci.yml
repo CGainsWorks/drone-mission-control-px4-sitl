@@ -3,7 +3,8 @@ name: CI
 # What runs where, which the README states in the same words:
 #
 #   every push and pull request
-#     test        unit tests, lint and mission validation
+#     test        unit tests, lint, mission validation and a check that every
+#                 number the README quotes matches its committed source
 #     docker      the reproduction image builds and its quick pipeline passes
 #     sitl-smoke  PX4 v1.17.0 SIH in a container and one short mission flown
 #                 by the MPC over MAVLink, gated on completing it
@@ -37,7 +38,7 @@ env:
 
 jobs:
   test:
-    name: Tests, lint and missions
+    name: Tests, lint, missions and README numbers
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -66,6 +67,12 @@ jobs:
         run: python scripts/validate_missions.py
         env:
           PYTHONPATH: src
+
+      # Every number the README quotes, rebuilt from docs/RESULTS.md,
+      # sitl/results/summary.json and the benchmark tables and compared; the
+      # generated SITL tables must match the committed summary exactly.
+      - name: README numbers match the committed summaries
+        run: python scripts/check_readme.py
 
   # The Docker image is what the README tells people to run first, so it has to
   # build and the quick pipeline has to pass inside it.
@@ -194,7 +201,7 @@ jobs:
   # Every mission by both trackers and every failsafe row, against PX4. SITL
   # runs in real time and is not bit reproducible, so this gates on behaviour
   # (each flight completes, each fault produces the action its row specifies)
-  # rather than on the committed numbers, and uploads the logs.
+  # rather than on the committed numbers and uploads the logs.
   sitl-campaign:
     name: Full PX4 SITL campaign (SIH)
     runs-on: ubuntu-24.04

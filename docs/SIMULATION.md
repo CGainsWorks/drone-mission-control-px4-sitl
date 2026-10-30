@@ -6,13 +6,15 @@ being explicit about what it models and what it does not.
 Read [`LIMITATIONS.md`](LIMITATIONS.md) alongside this. This page describes what
 is there; that one describes what is missing.
 
-## Why not Gazebo
+## Why not PX4 SITL for the headline
 
-PX4 SITL with Gazebo exists in this repository (`sitl/`) and works. It is not
-where the numbers come from, for one reason: **a result nobody can reproduce is
-not a result.** The reference simulation runs the whole scenario grid in a few
-minutes, deterministically, on any machine, with no toolchain. Gazebo needs a
-two-gigabyte build and does not give the same answer twice.
+PX4 SITL is in this repository and is flown in CI: a smoke flight on every push
+and the full campaign weekly, against PX4 v1.17.0 with its SIH model (see
+[`../sitl/README.md`](../sitl/README.md) and [`SITL_RESULTS.md`](SITL_RESULTS.md)).
+It is not where the 84-run comparison comes from, for one reason: SITL runs in
+real time and does not give the same answer twice, so the statistics would
+take hours per run and could not be checked by regenerating them. The reference
+simulation runs the whole grid deterministically on any machine.
 
 The trade is faithfulness. See the limitations page for what that costs.
 
@@ -37,7 +39,7 @@ Two consequences of those drag figures worth knowing, because both surprised the
 tests before they were understood:
 
 - **Vertical drag is not a small correction.** At 5 m/s of descent it is already
-  about a third of the vehicle's weight, and terminal velocity is 8.6 m/s.
+  about a third of the vehicle's weight and terminal velocity is 8.6 m/s.
 - **Cruise drag is what the MPC's disturbance estimator is there for.** At 5 m/s
   it costs 2.2 m/s² of acceleration, which the MPC's internal model knows
   nothing about.
@@ -75,12 +77,12 @@ term. **Neither tracker is allowed to touch it**, so both fly the same vehicle.
 The attitude law does not drive the full quaternion error. It builds a *reduced*
 setpoint that rotates the current attitude the short way onto the desired thrust
 axis, then rotates a fraction of the way from there towards the full setpoint —
-PX4's construction, and it matters for two reasons.
+PX4's construction and it matters for two reasons.
 
 The first is priority: thrust direction holds the vehicle up and moves it,
 heading only points the camera. The second is conditioning. At a yaw error
 approaching 180 degrees the full-quaternion law is ill-posed — the scalar part
-passes through zero, the shortest-path sign flips, and the rate demand chatters
+passes through zero, the shortest-path sign flips and the rate demand chatters
 between its limits. That is not theoretical; it is what lost the vehicle on a
 leg flown nose-backwards during development, intermittently, which is the worst
 way to find a bug.
@@ -103,7 +105,7 @@ consequence.
 Getting this order wrong is not subtle. An earlier version scaled all three
 torque axes together, so the large yaw demand generated while turning a corner
 scaled roll and pitch down with it. The vehicle stopped being able to hold the
-turn, flew wide, demanded more correction, and departed. The symptom looked like
+turn, flew wide, demanded more correction and departed. The symptom looked like
 a controller tuning problem and was not.
 
 `tests/test_quadrotor.py::TestMixer` asserts the priority directly.
@@ -121,7 +123,7 @@ Initial biases are drawn per run, so the filter has something real to estimate.
 The receiver model reproduces the three behaviours that actually matter to an
 RTK-equipped aircraft:
 
-- **Fix-dependent accuracy**, and the receiver reports its own figure, so an RTK
+- **Fix-dependent accuracy** and the receiver reports its own figure, so an RTK
   dropout shows up as a covariance change rather than a silent degradation.
 - **Slowly correlated error**, wandering on a one- to two-minute timescale.
   Averaging does not remove it, which is why a naive position loop drifts with
@@ -138,21 +140,21 @@ serialisable and appears verbatim in the results.
 A steady vector plus a first-order Gauss-Markov gust per axis: the standard
 low-order stand-in for the Dryden spectrum. It has the right variance and the
 right correlation time, which is what determines whether a preview horizon
-helps, and it is exactly reproducible from a seed.
+helps and it is exactly reproducible from a seed.
 
 Exactly discretised, so the stationary variance does not depend on the step
-size, and started from the stationary distribution rather than from zero, so a
+size and started from the stationary distribution rather than from zero, so a
 short run is not dominated by spin-up.
 
 ## Battery
 
 Deliberately simple, because the failsafe layer needs only two things from a
-battery: a state of charge that falls faster under load, and a terminal voltage
+battery: a state of charge that falls faster under load and a terminal voltage
 that **sags under load and recovers when the load drops**.
 
 That second property is the whole reason the low-battery failsafe is debounced.
 A voltage-based estimate dips during a climb and recovers in the cruise that
-follows, and a naive threshold on it triggers a return the vehicle did not need.
+follows and a naive threshold on it triggers a return the vehicle did not need.
 Modelling the sag is what makes the debounce testable instead of decorative.
 
 Current scales with thrust to the 3/2 power, as a propeller in hover does: a
@@ -173,11 +175,11 @@ averaged. `tests/test_runner.py::TestDeterminism` asserts it.
 About 3x real time for a PID run on one core, 2.5x for MPC. The full scenario
 grid runs in parallel across cores; on a 16-core machine it is a few minutes.
 
-Two optimisations account for most of that, and both were found by profiling
+Two optimisations account for most of that and both were found by profiling
 rather than guessed:
 
 - **The output predictor is computed lazily.** It re-integrates the IMU buffer,
-  which is O(buffer) per call, and it was being called at the IMU rate (200 Hz)
+  which is O(buffer) per call and it was being called at the IMU rate (200 Hz)
   when its result is only ever read at the control rate (50 Hz).
 - **The plant's rotor torque is a matrix product**, not a loop of cross
   products — and it reuses the mixer's own matrix, so the plant and the control
