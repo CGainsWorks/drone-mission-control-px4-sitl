@@ -18,21 +18,21 @@ FROM px4io/px4-dev:${PX4_VERSION} AS build
 ARG PX4_VERSION
 
 # --shallow-submodules matters: --depth 1 alone applies only to the
-# superproject, and fetching the full history of every submodule is the
+# superproject and fetching the full history of every submodule is the
 # difference between about two minutes and several hours.
 RUN git clone --depth 1 --shallow-submodules --recurse-submodules \
         --branch ${PX4_VERSION} \
         https://github.com/PX4/PX4-Autopilot.git /src/px4
 
 WORKDIR /src/px4
-# The nolockstep variant, and build only.
+# The nolockstep variant and build only.
 #
 # In the default (lockstep) build PX4's clock is simulation time, which SIH
 # advances in fixed steps and then sleeps for the remainder of each step. The
 # sleeps overshoot, so simulation time runs slow: measured here at 0.944 of
 # wall-clock time. The trackers run on wall-clock time in a separate process,
 # so in a lockstep build the vehicle's physics and the controller disagree
-# about how long a second is by over 5%, and the ULog's clock drifts away from
+# about how long a second is by over 5% and the ULog's clock drifts away from
 # the flight script's. The nolockstep build runs PX4 and SIH on the real
 # monotonic clock, which is what an external real-time controller needs.
 #

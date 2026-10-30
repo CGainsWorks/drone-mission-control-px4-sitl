@@ -2,7 +2,7 @@
 """Fly one mission against PX4 SITL with this repository's control stack.
 
 It runs the same mission state machine, trajectory generator, PID or MPC
-tracker, geofence and failsafe matrix as the reference simulation, and only
+tracker, geofence and failsafe matrix as the reference simulation and only
 the bottom layer changes: the built-in plant is replaced by a PX4 autopilot
 over MAVLink. With ``--scenario`` it injects one fault from the failsafe
 matrix into PX4 or into the MAVLink path, at a fixed point on the first leg.
@@ -201,7 +201,7 @@ def main() -> int:
                 battery_voltage_v=battery.voltage_v,
                 link_silence_s=backend.link_silence_s,
                 link_connected=backend.is_connected(),
-                # Reported by PX4 over MAVLink: GPS_RAW_INT's fix type, and how
+                # Reported by PX4 over MAVLink: GPS_RAW_INT's fix type and how
                 # long since it last said 3D or better.
                 gnss_usable=gnss["fix_type"] >= 3,
                 gnss_is_rtk=gnss["fix_type"] >= 6,

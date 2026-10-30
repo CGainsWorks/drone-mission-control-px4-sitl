@@ -4,7 +4,7 @@
 ``scripts/identify_lag.py`` measures this for the reference simulation's
 attitude loop: 0.13 s, a first-order lag. Against PX4 the path from a command
 to its effect is longer. The setpoint crosses MAVLink and MAVSDK, PX4's
-attitude and rate loops act on it, and the state the next command is computed
+attitude and rate loops act on it and the state the next command is computed
 from has come back through PX4's EKF and MAVLink again. Gains placed for 0.13 s
 are not placed for that.
 
@@ -13,7 +13,7 @@ flight script's loop log) to the thrust acceleration the vehicle actually had
 (ground-truth velocity from PX4's ULog, plus SIH's linear drag, which is a
 known force and not part of the response), over the survey phase of one
 flight. The result is what ``sitl.PX4_SIH_COMMAND_DELAY_S`` and
-``sitl.PX4_SIH_LAG_TAU_S`` hold, and what ``scripts/tune_gains.py --airframe
+``sitl.PX4_SIH_LAG_TAU_S`` hold and what ``scripts/tune_gains.py --airframe
 sih`` tunes against.
 
 Run:  python scripts/identify_px4_lag.py sitl/results/flights/facade_inspection-mpc

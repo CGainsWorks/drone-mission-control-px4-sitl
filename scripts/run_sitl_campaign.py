@@ -60,9 +60,9 @@ def fly(flight: dict, px4_image: str, flight_image: str, output: str,
 
     remove_containers()
     origin = mission.origin
-    # --network none: PX4 gets a loopback interface and nothing else, and the
+    # --network none: PX4 gets a loopback interface and nothing else and the
     # flight container joins that namespace. MAVLink's fixed UDP ports then
-    # cannot meet any other simulator on the same Docker host, and nothing
+    # cannot meet any other simulator on the same Docker host and nothing
     # outside can reach them. It is also why the flight script and PX4 find
     # each other on 127.0.0.1 with no configuration.
     docker("run", "-d", "--name", PX4_CONTAINER, "--network", "none",
@@ -115,14 +115,14 @@ def fly(flight: dict, px4_image: str, flight_image: str, output: str,
 
 
 def fly_until_valid(flight: dict, args) -> int:
-    """Fly, and re-fly if PX4 reports that its simulated sensors stalled.
+    """Fly and re-fly if PX4 reports that its simulated sensors stalled.
 
     The nolockstep build runs SIH on the wall clock, so a host that stops
     scheduling PX4 for long enough makes PX4's own sensor monitor declare an
-    accelerometer timed out, and EKF2 degrades from there. That is a fault in
-    the simulation, not in anything under test, and a flight it happened in
+    accelerometer timed out and EKF2 degrades from there. That is a fault in
+    the simulation, not in anything under test and a flight it happened in
     says nothing about the trackers. It is detected from PX4's own error
-    messages in the ULog, and every attempt and its reason is kept in
+    messages in the ULog and every attempt and its reason is kept in
     attempts.json beside the flight, so a re-fly is never silent.
     """
     attempts = []

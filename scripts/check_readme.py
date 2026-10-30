@@ -114,15 +114,17 @@ def sitl_readme_claims(summary: dict) -> list:
     delay, lag = sitl.PX4_SIH_COMMAND_DELAY_S, sitl.PX4_SIH_LAG_TAU_S
     claims = [
         f"**{delay:.2f} s delay and a {lag:.2f} s lag**",
-        f"{delay + lag:.2f} s, the same way the reference MPC's",
+        f"lag, {delay + lag:.2f} s, the same way the reference MPC's",
     ]
     transfer = {flight["tracker"]: flight for flight in summary.get("transfer", [])}
-    if "mpc" in transfer:
-        claims.append(f"the MPC flew the facade survey at {transfer['mpc']['rms_error_m']:.2f} m")
-    if "pid" in transfer:
-        pid = transfer["pid"]
-        claims.append(f"PX4's EKF {pid['rms_estimation_error_m']:.1f} m RMS away from the truth")
-        claims.append(f"mission {pid['rms_error_m']:.1f} m RMS from its path")
+    if {"pid", "mpc"} <= set(transfer):
+        pid, mpc = transfer["pid"], transfer["mpc"]
+        claims += [
+            f"The PID's demand runs at {pid['rms_jerk_ms3']:.1f} m/s³ RMS and sits at an "
+            f"acceleration limit for {pid['saturated_fraction']:.0%} of the survey",
+            f"the MPC's at {mpc['rms_jerk_ms3']:.1f} m/s³",
+            f"({pid['rms_error_m']:.2f} m and {mpc['rms_error_m']:.2f} m RMS)",
+        ]
     return claims
 
 
@@ -133,8 +135,12 @@ def check(readme: str, results: str, estimator: str, controllers: str,
         for claim in sitl_readme_claims(sitl_summary):
             if " ".join(claim.split()) not in " ".join(sitl_readme.split()):
                 problems.append(f"sitl/README.md does not say: {claim}")
+    # Prose is compared with its line breaks folded to spaces, so re-wrapping
+    # a paragraph does not fail the check; the generated table is compared
+    # exactly, below.
+    flat = " ".join(readme.split())
     for claim in reference_claims(results) + benchmark_claims(estimator, controllers):
-        if claim not in readme:
+        if " ".join(claim.split()) not in flat:
             problems.append(f"README does not say: {claim}")
     expected = sitl.readme_sitl_block(sitl_summary)
     actual = sitl.extract_block(readme)

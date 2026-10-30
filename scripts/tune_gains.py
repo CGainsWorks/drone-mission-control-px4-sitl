@@ -612,7 +612,8 @@ def main() -> int:
 
         plant = {"airframe": args.airframe,
                  "command_delay_s": sitl.PX4_SIH_COMMAND_DELAY_S,
-                 "lag_tau_s": sitl.PX4_SIH_COMMAND_DELAY_S + sitl.PX4_SIH_LAG_TAU_S}
+                 "lag_tau_s": round(sitl.PX4_SIH_COMMAND_DELAY_S
+                                        + sitl.PX4_SIH_LAG_TAU_S, 3)}
         output = sitl.SIH_GAINS_PATH
 
     started = time.perf_counter()

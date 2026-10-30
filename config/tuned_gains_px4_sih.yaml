@@ -20,7 +20,7 @@ training:
     stability. Both controllers are held to the same budget.
   airframe: sih
   command_delay_s: 0.16
-  mpc_lag_tau_s: 0.33999999999999997
+  mpc_lag_tau_s: 0.34
 
 pid:
   natural_frequency_xy: 3.0
@@ -40,7 +40,7 @@ mpc:
   horizon: 20
   step_s: 0.08
   horizon_s: 1.6
-  lag_tau_s: 0.33999999999999997
+  lag_tau_s: 0.34
   position_weight: [60.0, 60.0, 90.0]
   velocity_weight: [6.0, 6.0, 9.0]
   input_weight: [0.05, 0.05, 0.05]

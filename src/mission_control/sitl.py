@@ -5,7 +5,7 @@ definitions and its analysis are unit-tested like the rest of the stack. The
 parts that talk to an autopilot are ``scripts/run_px4_sitl.py`` (one flight)
 and ``scripts/run_sitl_campaign.py`` (the containers around it).
 
-What is measured, and against what
+What is measured and against what
 ----------------------------------
 
 The flight script logs, at every control step, the reference, the state PX4
@@ -72,7 +72,7 @@ def gz_x500_params() -> QuadrotorParams:
     """PX4's Gazebo x500, for the optional visual run (``sitl/gazebo.Dockerfile``).
 
     From ``Tools/simulation/gz/models/x500_base/model.sdf``: a 2.0 kg body plus
-    four 16.1 g rotors at (+/-0.174, +/-0.174) m, and motorConstant 8.54858e-06
+    four 16.1 g rotors at (+/-0.174, +/-0.174) m and motorConstant 8.54858e-06
     against maxRotVelocity 1000 rad/s, which is 8.55 N per rotor.
     """
     return QuadrotorParams(
@@ -111,7 +111,7 @@ AIRFRAME_GAINS = {"sih": SIH_GAINS_PATH, "gz_x500": None}
 #: is established on the first leg and moving at cruise speed.
 INJECT_AFTER_MISSION_S = 20.0
 
-#: A HOLD is a terminal outcome for a test (the matrix latches, and the state
+#: A HOLD is a terminal outcome for a test (the matrix latches and the state
 #: machine holds indefinitely), so the flight is ended this long after the hold
 #: begins, by commanding PX4 to land.
 HOLD_OBSERVE_S = 12.0
@@ -169,7 +169,7 @@ TRACKERS = ("pid", "mpc")
 
 #: A tracking flight with an RMS error to ground truth above this has not
 #: flown its mission, whatever its final state says. Several times the worst
-#: SITL tracking flight with the SITL gains, and far below what a tracker that
+#: SITL tracking flight with the SITL gains and far below what a tracker that
 #: has lost the vehicle or the estimator produces.
 TRACKING_GATE_M = 3.0
 
@@ -571,6 +571,9 @@ def summarise_flight(flight_dir: str, mission) -> dict:
     if ulog_path is not None:
         ulog = load_ulog(ulog_path, mission.origin)
         est = np.column_stack([loop["est_north"], loop["est_east"], loop["est_down"]])
+        # While the link is down the loop's copy of the estimate is frozen and
+        # PX4's is not, so those samples say nothing about the clocks.
+        est[loop["link_silence_s"] > 0.25] = np.nan
         offset, scale, residual = align_clocks(loop["time_s"], est, ulog["est_t"],
                                                ulog["est_ned"])
         log = build_flight_log(loop, ulog, offset, scale)
@@ -651,13 +654,18 @@ def readme_sitl_block(summary: dict) -> str:
 
     lines = [README_BEGIN,
              "| Mission (PX4 SIH, simulated) | PID RMS | MPC RMS "
-             "| PID cross-track | MPC cross-track |",
-             "| --- | ---: | ---: | ---: | ---: |"]
+             "| PID cross-track | MPC cross-track | PID jerk | MPC jerk |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+
+    def jerk(value):
+        return "n/a" if value is None else f"{value:.1f} m/s³"
+
     for row in summary["comparison"]:
         lines.append(
             f"| `{row['mission'].replace('_', ' ')}` | {metres(row['pid_rms_m'])} | "
             f"{metres(row['mpc_rms_m'])} | {metres(row['pid_cross_track_m'])} | "
-            f"{metres(row['mpc_cross_track_m'])} |"
+            f"{metres(row['mpc_cross_track_m'])} | {jerk(row.get('pid_jerk_ms3'))} | "
+            f"{jerk(row.get('mpc_jerk_ms3'))} |"
         )
     lines.append("")
     lines.append("| Failsafe (PX4 SIH, simulated) | Expected | Observed | Rule | Vehicle |")

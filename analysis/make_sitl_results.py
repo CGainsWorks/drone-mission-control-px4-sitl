@@ -12,7 +12,7 @@ and, with ``--write-readme``, the generated SITL table in README.md.
 
 ``--check`` exits non-zero unless every tracking flight completed and every
 failsafe flight did what its row of the matrix says. CI uses it after flying
-the campaign, and ``--check-only`` applies the same gate to the one-flight smoke run
+the campaign and ``--check-only`` applies the same gate to the one-flight smoke run
 without writing anything that is committed.
 
 All numbers are simulated: PX4 v1.17.0 SIH, not an aircraft.
@@ -79,7 +79,7 @@ def build_summary(flights: list, transfer: list = ()) -> dict:
     return {
         "note": "Simulated: PX4 SIH software-in-the-loop, not flight hardware.",
         "px4_version": sitl.PX4_VERSION,
-        "airframe": "PX4 SIH quadrotor (airframe 10040, sihsim_quadx)",
+        "airframe": "SIH quadrotor (airframe 10040, sihsim_quadx)",
         "flights": flights,
         "comparison": sitl.tracker_comparison(flights),
         "failsafes": failsafes,
@@ -105,10 +105,10 @@ def gate(summary: dict) -> list:
             elif flight.get("rms_error_m") is None:
                 problems.append(f"{flight['flight']}: no tracking metrics")
             elif flight["rms_error_m"] > sitl.TRACKING_GATE_M:
-                # Completing is not enough. A tracker that limit-cycles can
-                # drag PX4's EKF away from the truth and then "complete" the
-                # mission tens of metres from where it believes it is; this
-                # happened, with the reference gains, before the SITL gains.
+                # Completing is not enough. Once PX4's EKF has been pulled away
+                # from the truth, a flight can "complete" the mission tens of
+                # metres from where it believes it is; this happened in flights
+                # where the simulator stalled, before stalls were detected.
                 problems.append(
                     f"{flight['flight']}: RMS error to truth {flight['rms_error_m']:.2f} m, "
                     f"above the {sitl.TRACKING_GATE_M:.1f} m gate")
@@ -134,8 +134,8 @@ def render_document(summary: dict) -> str:
         "Do not edit by hand._",
         "",
         f"**Simulated.** Every number here comes from PX4 {summary['px4_version']} "
-        "software-in-the-loop with PX4's own SIH physics model "
-        f"({summary['airframe']}), driven over MAVLink by this repository's mission "
+        f"software-in-the-loop with PX4's own SIH physics model, flying the "
+        f"{summary['airframe']}, driven over MAVLink by this repository's mission "
         "layer and trackers, with the gains tuned for this airframe in "
         f"`{summary['gains_file']}`. No aircraft was flown.",
         "",
@@ -191,8 +191,8 @@ def render_document(summary: dict) -> str:
             "",
             "## The reference gains, unchanged",
             "",
-            "Flown before the campaign, with `config/tuned_gains.yaml` (tuned for the "
-            "reference airframe) instead of the gains tuned for PX4 SIH. Kept because "
+            "Flown by the same job as the campaign, with `config/tuned_gains.yaml` (tuned "
+            "for the reference airframe) instead of the gains tuned for PX4 SIH. Kept because "
             "they are why the campaign re-tunes: see [`sitl/README.md`](../sitl/README.md). "
             "Logs in `sitl/results/transfer/`.",
             "",
@@ -236,9 +236,9 @@ def render_document(summary: dict) -> str:
         "",
         "PX4 runs on the wall clock (the nolockstep build), so a host that stops "
         "scheduling it for long enough makes PX4 report a simulated sensor as timed "
-        "out, and its EKF degrades. A flight where PX4 logged that is a fault in the "
+        "out and its EKF degrades. A flight where PX4 logged that is a fault in the "
         "simulation rather than in anything under test, so the campaign re-flies it; "
-        "the attempts column counts the flights, and `attempts.json` beside each "
+        "the attempts column counts the flights and `attempts.json` beside each "
         "flight records why.",
         "",
     ]

@@ -5,7 +5,7 @@
 # starts, so every value here is final. Setting them earlier, through the
 # PX4_PARAM_<name> environment hook, does not work for a value equal to the
 # parameter's compiled default: rcS then calls `param set-default` on several
-# of them (SDLOG_MODE, COM_LOW_BAT_ACT), and a set to the old default does not
+# of them (SDLOG_MODE, COM_LOW_BAT_ACT) and a set to the old default does not
 # survive that. Measured on v1.17.0: COM_LOW_BAT_ACT ended up at 3, not 0.
 #
 # Each line is here because its default gets in the way of an external
