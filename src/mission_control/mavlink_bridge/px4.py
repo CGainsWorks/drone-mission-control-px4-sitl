@@ -393,12 +393,24 @@ class Px4SitlBackend(VehicleBackend):
         self._connected = False
 
     # ------------------------------------------------------------------
-    def arm(self) -> None:
+    def arm(self, timeout_s: float = 20.0) -> None:
+        """Arm, retrying while PX4 is still refusing for a transient reason.
+
+        A global position and a home position are not the whole of PX4's
+        preflight checks; on a cold start the estimator can report both and
+        still be refused for a few seconds more (COMMAND_DENIED). A refusal
+        that outlasts ``timeout_s`` is a real one and is raised.
+        """
         self._require_connection()
-        try:
-            self._run(self._drone.action.arm())
-        except Exception as error:
-            raise BackendError(f"PX4 refused to arm: {error}") from error
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                self._run(self._drone.action.arm())
+                return
+            except Exception as error:
+                if time.monotonic() > deadline:
+                    raise BackendError(f"PX4 refused to arm: {error}") from error
+                time.sleep(1.0)
 
     def disarm(self) -> None:
         self._require_connection()
@@ -497,7 +509,13 @@ class Px4SitlBackend(VehicleBackend):
         deciding when the vehicle is actually down.
         """
         self._require_connection()
-        self.stop_offboard()
+        try:
+            self.stop_offboard()
+        except BackendError:
+            # Leaving offboard first is tidy, not necessary: a land command is
+            # accepted from offboard too. Failing to leave it, which happens if
+            # the link is down at that moment, must not stop the landing.
+            pass
         self._run(self._drone.action.land())
 
     # ------------------------------------------------------------------
@@ -526,9 +544,19 @@ class Px4SitlBackend(VehicleBackend):
         return self._connected
 
     def gnss(self) -> dict:
-        """Latest fix type and satellite count, and seconds since a 3D fix."""
+        """Latest fix type and satellite count, and how long GNSS had been bad.
+
+        The age is measured to the last telemetry received, not to now. While
+        the link is down nothing is known about the receiver, and treating
+        that silence as a GNSS outage made the GNSS rule (land) fire 2.5 s
+        into a link loss, ahead of the link-loss rule it should have left to
+        decide. Link silence is the link-loss rule's input; this is GNSS's.
+        """
         with self._lock:
-            age = (time.monotonic() - self._last_gnss_s) if self._last_gnss_s else math.inf
+            if not self._last_gnss_s:
+                age = math.inf
+            else:
+                age = max(0.0, self._last_telemetry_s - self._last_gnss_s)
             return {
                 "fix_type": self._gnss_fix_type,
                 "satellites": self._gnss_satellites,
