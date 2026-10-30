@@ -138,6 +138,15 @@ class Px4SitlBackend(VehicleBackend):
         future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
         return future.result(timeout_s)
 
+    def _wait(self, coroutine, timeout_s: float) -> bool:
+        """Run a wait-for-condition coroutine; False if it never came true."""
+        import concurrent.futures
+
+        try:
+            return bool(self._run(coroutine, timeout_s=timeout_s + 5.0))
+        except concurrent.futures.TimeoutError:
+            return False
+
     def connect(self, timeout_s: float = 30.0) -> None:
         import asyncio
         import threading
@@ -167,7 +176,13 @@ class Px4SitlBackend(VehicleBackend):
                     return False
             return False
 
-        if not self._run(wait_for_connection()):
+        # Each wait is bounded twice: by its own deadline, checked when a
+        # message arrives, and by the future's timeout, for when none does.
+        # The second must be longer than the first. It used to be the 30 s
+        # default whatever timeout_s was, so a cold PX4 on a CI runner, whose
+        # EKF takes longer than that to report a global position, failed with a
+        # bare TimeoutError while the stated limit was 120 s.
+        if not self._wait(wait_for_connection(), timeout_s):
             raise BackendError(
                 f"no PX4 system on {self.system_address} within {timeout_s:.0f} s. "
                 "Is SITL running? See sitl/README.md."
@@ -185,7 +200,7 @@ class Px4SitlBackend(VehicleBackend):
                     return False
             return False
 
-        if not self._run(wait_for_position()):
+        if not self._wait(wait_for_position(), timeout_s):
             raise BackendError(
                 "PX4 connected but never reported a usable global position. "
                 "In SITL this usually means the simulated GPS has not locked yet."
