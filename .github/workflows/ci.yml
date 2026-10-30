@@ -22,8 +22,10 @@ on:
   schedule:
     - cron: "17 4 * * 1"
 
+# Superseded pushes cancel each other; a scheduled or dispatched run, which
+# flies the long jobs, is in its own group so a push does not cancel it.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
