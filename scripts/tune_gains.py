@@ -435,9 +435,11 @@ def tune_mpc(quick=False, workers=None, plant=REFERENCE_PLANT) -> dict:
     if plant["airframe"] != "reference":
         # Against a plant with a command delay the optimum moves to lighter
         # position weights and heavier input-rate penalties: a first pass on
-        # the grid above ran to its lowest q_pos and highest r_du. This grid
-        # is centred there instead. One horizon only, since the reference
-        # search showed horizon length does not move the result.
+        # the grid above ran to its lowest q_pos and highest r_du, and every
+        # candidate there with r_du of 0.10 or less broke the jerk budget at
+        # q_pos 30. This grid is centred on that region instead. One horizon
+        # only, since the reference search showed horizon length does not
+        # move the result.
         horizons = [(20, 0.08)]
         position_weights = [10.0, 30.0, 60.0]
         rate_weights = [0.2, 0.5, 2.0]
