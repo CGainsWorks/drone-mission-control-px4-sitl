@@ -441,7 +441,7 @@ def tune_mpc(quick=False, workers=None, plant=REFERENCE_PLANT) -> dict:
         # only, since the reference search showed horizon length does not
         # move the result.
         horizons = [(20, 0.08)]
-        position_weights = [10.0, 30.0, 60.0]
+        position_weights = [10.0, 30.0, 60.0, 100.0]
         rate_weights = [0.2, 0.5, 2.0]
     specs = TRAINING[:1] if quick else TRAINING
     if quick:

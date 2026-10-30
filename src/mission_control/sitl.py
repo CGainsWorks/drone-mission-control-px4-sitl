@@ -87,11 +87,12 @@ def gz_x500_params() -> QuadrotorParams:
 AIRFRAMES = {"sih": sih_quadx_params, "gz_x500": gz_x500_params}
 
 #: How PX4 SIH responds to an acceleration demand from this stack, measured by
-#: ``scripts/identify_px4_lag.py`` on the campaign's facade flight: a transport
-#: delay (MAVLink, MAVSDK, PX4's estimator on the way back) and a first-order
-#: lag (PX4's attitude and rate loops). The reference simulation's attitude
+#: ``scripts/identify_px4_lag.py`` on a facade flight flown on a GitHub-hosted
+#: runner: a transport delay (MAVLink, MAVSDK, PX4's estimator on the way back)
+#: and a first-order lag (PX4's attitude and rate loops). Other clean flights
+#: give 0.12 to 0.16 s and 0.16 to 0.22 s. The reference simulation's attitude
 #: loop, by comparison, is a 0.13 s lag with no delay.
-PX4_SIH_COMMAND_DELAY_S = 0.18
+PX4_SIH_COMMAND_DELAY_S = 0.16
 PX4_SIH_LAG_TAU_S = 0.18
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

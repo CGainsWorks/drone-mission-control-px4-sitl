@@ -19,8 +19,8 @@ training:
     posed: minimising error alone drives any controller to the edge of
     stability. Both controllers are held to the same budget.
   airframe: sih
-  command_delay_s: 0.18
-  mpc_lag_tau_s: 0.36
+  command_delay_s: 0.16
+  mpc_lag_tau_s: 0.33999999999999997
 
 pid:
   natural_frequency_xy: 3.0
@@ -31,24 +31,24 @@ pid:
   velocity_p: [4.8, 4.8, 4.5]
   velocity_i: [0.6, 0.6, 1.0]
   velocity_d: [0.2, 0.2, 0.1]
-  training_rms_m: 0.4601
-  training_max_m: 1.07149
-  training_jerk_ms3: 24.494
-  training_step_settle_m: 0.0903
+  training_rms_m: 0.42646
+  training_max_m: 0.7297
+  training_jerk_ms3: 15.352
+  training_step_settle_m: 0.0122
 
 mpc:
   horizon: 20
   step_s: 0.08
   horizon_s: 1.6
-  lag_tau_s: 0.36
-  position_weight: [30.0, 30.0, 45.0]
-  velocity_weight: [3.0, 3.0, 4.5]
+  lag_tau_s: 0.33999999999999997
+  position_weight: [60.0, 60.0, 90.0]
+  velocity_weight: [6.0, 6.0, 9.0]
   input_weight: [0.05, 0.05, 0.05]
-  input_rate_weight: [0.2, 0.2, 0.2]
+  input_rate_weight: [0.5, 0.5, 0.5]
   terminal_scale: 6.0
   disturbance_gain: 8.0
   disturbance_limit: 4.0
-  training_rms_m: 0.28505
-  training_max_m: 0.79434
-  training_jerk_ms3: 17.545
-  training_step_settle_m: 0.0299
+  training_rms_m: 0.26551
+  training_max_m: 0.73914
+  training_jerk_ms3: 11.59
+  training_step_settle_m: 0.0194
