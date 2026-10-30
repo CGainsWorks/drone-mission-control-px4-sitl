@@ -73,6 +73,9 @@ def main() -> int:
     parser.add_argument("--scenario", default="none",
                         choices=["none", *sitl.SITL_FAILSAFE_SCENARIOS])
     parser.add_argument("--airframe", default="sih", choices=sorted(sitl.AIRFRAMES))
+    parser.add_argument("--gains", default="airframe", choices=["airframe", "reference"],
+                        help="airframe: gains tuned for the simulated airframe (the "
+                             "campaign); reference: the reference comparison's gains")
     parser.add_argument("--name", default="", help="flight name for the log")
     parser.add_argument("--output", default=os.path.join(ROOT, "results", "sitl"))
     parser.add_argument("--address", default=os.environ.get("PX4_ADDRESS",
@@ -95,7 +98,7 @@ def main() -> int:
     print(f"tracker:  {args.tracker}   airframe: {args.airframe}   scenario: {args.scenario}")
 
     params = sitl.AIRFRAMES[args.airframe]()
-    gains_path = sitl.AIRFRAME_GAINS.get(args.airframe)
+    gains_path = sitl.AIRFRAME_GAINS.get(args.airframe) if args.gains == "airframe" else None
     tracker = make_tracker(args.tracker, params, gains_path=gains_path)
     executive = MissionExecutive(mission)
     geofence = Geofence.from_spec(mission.geofence)

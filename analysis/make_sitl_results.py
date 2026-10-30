@@ -96,6 +96,9 @@ def build_summary(flights: list, transfer: list = ()) -> dict:
 def gate(summary: dict) -> list:
     problems = []
     for flight in summary["flights"]:
+        if flight.get("simulator_faults"):
+            problems.append(f"{flight['flight']}: the simulator stalled "
+                            f"({flight['simulator_faults'][0]}); re-fly it")
         if flight["scenario"] == "none":
             if flight["result"] != "completed":
                 problems.append(f"{flight['flight']}: {flight['result']} ({flight['end_reason']})")
@@ -211,8 +214,9 @@ def render_document(summary: dict) -> str:
         "",
         "## Flights",
         "",
-        "| Flight | Duration of survey | Clock alignment residual | ULog (gzip) | End |",
-        "| --- | ---: | ---: | ---: | --- |",
+        "| Flight | Duration of survey | Clock alignment residual | ULog (gzip) | Attempts "
+        "| End |",
+        "| --- | ---: | ---: | ---: | ---: | --- |",
     ]
     for flight in summary["flights"]:
         duration = flight.get("duration_s")
@@ -220,7 +224,8 @@ def render_document(summary: dict) -> str:
             f"| `{flight['flight']}` | "
             f"{'n/a' if duration is None else f'{duration:.0f} s'} | "
             f"{metres(flight.get('clock_alignment_residual_m'))} | "
-            f"{(flight.get('ulog_bytes') or 0) / 1024:.0f} kB | {flight['end_reason']} |"
+            f"{(flight.get('ulog_bytes') or 0) / 1024:.0f} kB | {flight.get('attempts', 1)} | "
+            f"{flight['end_reason']} |"
         )
     lines += [
         "",
@@ -228,6 +233,13 @@ def render_document(summary: dict) -> str:
         "position estimate the mission layer received over MAVLink on the one PX4 "
         "logged: MAVLink transport and sampling. It bounds how much of each error "
         "above could be an artefact of putting two clocks on one axis.",
+        "",
+        "PX4 runs on the wall clock (the nolockstep build), so a host that stops "
+        "scheduling it for long enough makes PX4 report a simulated sensor as timed "
+        "out, and its EKF degrades. A flight where PX4 logged that is a fault in the "
+        "simulation rather than in anything under test, so the campaign re-flies it; "
+        "the attempts column counts the flights, and `attempts.json` beside each "
+        "flight records why.",
         "",
     ]
     return "\n".join(lines)

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import json
 import os
 import shutil
 import subprocess
@@ -73,6 +74,7 @@ def fly(flight: dict, px4_image: str, flight_image: str, output: str,
     command = ["python", "scripts/run_px4_sitl.py",
                "--mission", flight["mission"], "--tracker", flight["tracker"],
                "--scenario", flight["scenario"], "--name", flight["name"],
+               "--gains", flight.get("gains", "airframe"),
                "--output", "/tmp/flight", "--timeout", str(int(flight_timeout_s))]
     started = time.monotonic()
     try:
@@ -112,10 +114,41 @@ def fly(flight: dict, px4_image: str, flight_image: str, output: str,
     return code
 
 
+def fly_until_valid(flight: dict, args) -> int:
+    """Fly, and re-fly if PX4 reports that its simulated sensors stalled.
+
+    The nolockstep build runs SIH on the wall clock, so a host that stops
+    scheduling PX4 for long enough makes PX4's own sensor monitor declare an
+    accelerometer timed out, and EKF2 degrades from there. That is a fault in
+    the simulation, not in anything under test, and a flight it happened in
+    says nothing about the trackers. It is detected from PX4's own error
+    messages in the ULog, and every attempt and its reason is kept in
+    attempts.json beside the flight, so a re-fly is never silent.
+    """
+    attempts = []
+    code = 1
+    for attempt in range(1, max(1, args.attempts) + 1):
+        code = fly(flight, args.px4_image, args.flight_image, args.output,
+                   args.flight_timeout)
+        destination = os.path.join(args.output, flight["name"])
+        faults = sitl.simulator_faults(destination)
+        attempts.append({"attempt": attempt, "exit_code": code, "simulator_faults": faults})
+        if not faults:
+            break
+        print(f"  {flight['name']}: simulator fault on attempt {attempt}: {faults[0]}")
+    else:
+        code = code or 1
+    with open(os.path.join(args.output, flight["name"], "attempts.json"), "w",
+              encoding="utf-8", newline="\n") as handle:
+        json.dump(attempts, handle, indent=2)
+        handle.write("\n")
+    return code
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--campaign", default="full", choices=["full", "smoke"])
+    parser.add_argument("--campaign", default="full", choices=["full", "smoke", "transfer"])
     parser.add_argument("--only", default="", help="comma-separated flight names")
     parser.add_argument("--px4-image", default=os.environ.get("PX4_IMAGE",
                                                               "mission-control-px4-sih:latest"))
@@ -123,6 +156,8 @@ def main() -> int:
                                                                  "mission-control-sitl:latest"))
     parser.add_argument("--output", default=os.path.join(ROOT, "sitl", "results", "flights"))
     parser.add_argument("--flight-timeout", type=float, default=600.0)
+    parser.add_argument("--attempts", type=int, default=3,
+                        help="re-fly a flight whose simulator stalled, up to this many times")
     args = parser.parse_args()
 
     flights = sitl.campaign_flights(args.campaign)
@@ -136,8 +171,7 @@ def main() -> int:
     try:
         for flight in flights:
             print(f"\n=== {flight['name']}")
-            if fly(flight, args.px4_image, args.flight_image, args.output,
-                   args.flight_timeout) != 0:
+            if fly_until_valid(flight, args) != 0:
                 failures.append(flight["name"])
     finally:
         remove_containers()

@@ -185,17 +185,23 @@ def campaign_flights(kind: str = "full") -> list:
     """
     if kind == "smoke":
         return [{"name": f"{SMOKE_MISSION}-mpc", "mission": SMOKE_MISSION,
-                 "tracker": "mpc", "scenario": "none"}]
+                 "tracker": "mpc", "scenario": "none", "gains": "airframe"}]
+    if kind == "transfer":
+        # The facade survey with the reference comparison's gains, unchanged:
+        # the evidence for why the campaign uses gains tuned for PX4 SIH.
+        return [{"name": f"facade_inspection-{tracker}", "mission": "facade_inspection",
+                 "tracker": tracker, "scenario": "none", "gains": "reference"}
+                for tracker in TRACKERS]
     if kind != "full":
-        raise KeyError(f"unknown campaign {kind!r}; use 'full' or 'smoke'")
+        raise KeyError(f"unknown campaign {kind!r}; use 'full', 'smoke' or 'transfer'")
     flights = []
     for mission in TRACKING_MISSIONS:
         for tracker in TRACKERS:
             flights.append({"name": f"{mission}-{tracker}", "mission": mission,
-                            "tracker": tracker, "scenario": "none"})
+                            "tracker": tracker, "scenario": "none", "gains": "airframe"})
     for scenario in SITL_FAILSAFE_SCENARIOS:
         flights.append({"name": f"failsafe-{scenario}", "mission": "facade_inspection",
-                        "tracker": "mpc", "scenario": scenario})
+                        "tracker": "mpc", "scenario": scenario, "gains": "airframe"})
     return flights
 
 
@@ -311,18 +317,12 @@ def load_ulog(path: str, origin) -> dict:
     converted from latitude, longitude and altitude, which is how the flight
     script converted the estimate it flew on, so both sides use one frame.
     """
-    from pyulog import ULog
-
     wanted = [
         "vehicle_global_position", "vehicle_global_position_groundtruth",
         "vehicle_local_position_groundtruth", "vehicle_attitude_groundtruth",
         "vehicle_status", "battery_status", "sensor_gps",
     ]
-    if path.endswith(".gz"):
-        with gzip.open(path, "rb") as handle:
-            ulog = ULog(io.BytesIO(handle.read()), wanted)
-    else:
-        ulog = ULog(path, wanted)
+    ulog = _open_ulog(path, wanted)
 
     def geodetic(data):
         t = data["timestamp"].astype(float) * 1e-6
@@ -364,6 +364,45 @@ def load_ulog(path: str, origin) -> dict:
         out["gps_fix_min"] = int(np.min(gps["fix_type"]))
     out["duration_s"] = float(ulog.last_timestamp - ulog.start_timestamp) * 1e-6
     return out
+
+
+def _open_ulog(path: str, wanted=None):
+    from pyulog import ULog
+
+    if path.endswith(".gz"):
+        with gzip.open(path, "rb") as handle:
+            return ULog(io.BytesIO(handle.read()), wanted)
+    return ULog(path, wanted)
+
+
+def _ulog_path(flight_dir: str):
+    for name in ("px4.ulg.gz", "px4.ulg"):
+        path = os.path.join(flight_dir, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def simulator_faults(flight_dir: str) -> list:
+    """PX4's own reports that the simulation, not the vehicle, misbehaved.
+
+    SIH in the nolockstep build runs on the wall clock. If the host stops
+    scheduling PX4 for long enough, PX4's sensor monitor reports a simulated
+    sensor as timed out (``[sensors] Accel #0 fail: TIMEOUT!``) and EKF2
+    degrades. Any error-level message from the sensors module counts.
+    Returns the messages, or an empty list if there is no ULog to read or
+    pyulog is not installed.
+    """
+    path = _ulog_path(flight_dir)
+    if path is None:
+        return []
+    try:
+        ulog = _open_ulog(path, [])
+    except ImportError:
+        return []
+    return [message.message.strip() for message in ulog.logged_messages
+            if message.log_level_str() in ("ERROR", "EMERGENCY", "CRITICAL")
+            and "[sensors]" in message.message]
 
 
 def align_clocks(loop_t: np.ndarray, loop_est: np.ndarray, ulog_t: np.ndarray,
@@ -521,10 +560,14 @@ def summarise_flight(flight_dir: str, mission) -> dict:
         summary["rms_error_vs_estimate_m"] = _round(
             np.sqrt(np.mean(np.sum(est_err**2, axis=1))))
 
-    ulog_path = os.path.join(flight_dir, "px4.ulg.gz")
-    if not os.path.exists(ulog_path):
-        ulog_path = os.path.join(flight_dir, "px4.ulg")
-    if os.path.exists(ulog_path):
+    attempts_path = os.path.join(flight_dir, "attempts.json")
+    if os.path.exists(attempts_path):
+        with open(attempts_path, encoding="utf-8") as handle:
+            summary["attempts"] = len(json.load(handle))
+    summary["simulator_faults"] = simulator_faults(flight_dir)
+
+    ulog_path = _ulog_path(flight_dir)
+    if ulog_path is not None:
         ulog = load_ulog(ulog_path, mission.origin)
         est = np.column_stack([loop["est_north"], loop["est_east"], loop["est_down"]])
         offset, scale, residual = align_clocks(loop["time_s"], est, ulog["est_t"],

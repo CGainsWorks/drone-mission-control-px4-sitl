@@ -51,6 +51,16 @@ class TestCampaign:
         trajectory, _ = build_mission_path(np.array([0.0, 0.0, -10.0]), mission)
         assert trajectory.duration < 30.0
 
+    def test_only_the_transfer_flights_use_the_reference_gains(self):
+        transfer = sitl.campaign_flights("transfer")
+        assert {f["tracker"] for f in transfer} == set(sitl.TRACKERS)
+        assert all(f["gains"] == "reference" for f in transfer)
+        for kind in ("full", "smoke"):
+            assert all(f["gains"] == "airframe" for f in sitl.campaign_flights(kind))
+
+    def test_a_flight_without_a_ulog_reports_no_simulator_faults(self, tmp_path):
+        assert sitl.simulator_faults(str(tmp_path)) == []
+
     def test_unknown_campaign_is_an_error(self):
         with pytest.raises(KeyError):
             sitl.campaign_flights("everything")
