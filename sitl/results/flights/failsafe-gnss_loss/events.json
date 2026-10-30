@@ -1,0 +1,109 @@
+{
+  "airframe": "sih",
+  "end_reason": "landed and disarmed by PX4",
+  "failsafe_events": [
+    {
+      "action": "land",
+      "rule": "gnss_loss",
+      "time_s": 28.75
+    }
+  ],
+  "flight": "failsafe-gnss_loss",
+  "gains_file": "config/tuned_gains_px4_sih.yaml",
+  "injected_at_s": 28.11,
+  "loop_rate_hz": 49.77917967062752,
+  "mission": "facade_inspection",
+  "mode_changes": [
+    [
+      0.01,
+      "hold"
+    ],
+    [
+      0.57,
+      "offboard"
+    ],
+    [
+      29.56,
+      "land"
+    ],
+    [
+      59.56,
+      "hold"
+    ]
+  ],
+  "offboard_reengaged": [],
+  "px4_version": "v1.17.0",
+  "relay_counters": {
+    "down": 35536,
+    "down_dropped": 0,
+    "up": 1762,
+    "up_dropped": 0
+  },
+  "result": "failsafe",
+  "scenario": "gnss_loss",
+  "tracker": "mpc",
+  "tracker_config": {
+    "disturbance_gain": 8.0,
+    "horizon": 20,
+    "horizon_s": 1.6,
+    "input_rate_weight": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "input_weight": [
+      0.05,
+      0.05,
+      0.05
+    ],
+    "lag_tau_s": 0.33999999999999997,
+    "max_acceleration_xy": 8.0,
+    "max_tilt_deg": 45.47817136757678,
+    "name": "mpc",
+    "position_weight": [
+      60.0,
+      60.0,
+      90.0
+    ],
+    "solver": "projected-Newton box QP",
+    "step_s": 0.08,
+    "terminal_scale": 6.0,
+    "velocity_weight": [
+      6.0,
+      6.0,
+      9.0
+    ]
+  },
+  "transitions": [
+    {
+      "from": "idle",
+      "reason": "arm command",
+      "time_s": 0.0,
+      "to": "armed"
+    },
+    {
+      "from": "armed",
+      "reason": "mission start",
+      "time_s": 0.0,
+      "to": "takeoff"
+    },
+    {
+      "from": "takeoff",
+      "reason": "takeoff altitude reached",
+      "time_s": 8.087,
+      "to": "mission"
+    },
+    {
+      "from": "mission",
+      "reason": "failsafe land",
+      "time_s": 28.746,
+      "to": "landing"
+    },
+    {
+      "from": "landing",
+      "reason": "touchdown",
+      "time_s": 53.963,
+      "to": "disarmed"
+    }
+  ]
+}

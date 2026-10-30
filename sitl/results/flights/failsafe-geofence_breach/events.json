@@ -1,0 +1,115 @@
+{
+  "airframe": "sih",
+  "end_reason": "landed and disarmed by PX4",
+  "failsafe_events": [
+    {
+      "action": "rtl",
+      "rule": "geofence_breach",
+      "time_s": 28.2
+    }
+  ],
+  "flight": "failsafe-geofence_breach",
+  "gains_file": "config/tuned_gains_px4_sih.yaml",
+  "injected_at_s": 28.18,
+  "loop_rate_hz": 49.8389805905979,
+  "mission": "facade_inspection",
+  "mode_changes": [
+    [
+      0.0,
+      "hold"
+    ],
+    [
+      0.54,
+      "offboard"
+    ],
+    [
+      44.53,
+      "land"
+    ],
+    [
+      84.53,
+      "hold"
+    ]
+  ],
+  "offboard_reengaged": [],
+  "px4_version": "v1.17.0",
+  "relay_counters": {
+    "down": 37786,
+    "down_dropped": 0,
+    "up": 2435,
+    "up_dropped": 0
+  },
+  "result": "failsafe",
+  "scenario": "geofence_breach",
+  "tracker": "mpc",
+  "tracker_config": {
+    "disturbance_gain": 8.0,
+    "horizon": 20,
+    "horizon_s": 1.6,
+    "input_rate_weight": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "input_weight": [
+      0.05,
+      0.05,
+      0.05
+    ],
+    "lag_tau_s": 0.33999999999999997,
+    "max_acceleration_xy": 8.0,
+    "max_tilt_deg": 45.47817136757678,
+    "name": "mpc",
+    "position_weight": [
+      60.0,
+      60.0,
+      90.0
+    ],
+    "solver": "projected-Newton box QP",
+    "step_s": 0.08,
+    "terminal_scale": 6.0,
+    "velocity_weight": [
+      6.0,
+      6.0,
+      9.0
+    ]
+  },
+  "transitions": [
+    {
+      "from": "idle",
+      "reason": "arm command",
+      "time_s": 0.0,
+      "to": "armed"
+    },
+    {
+      "from": "armed",
+      "reason": "mission start",
+      "time_s": 0.0,
+      "to": "takeoff"
+    },
+    {
+      "from": "takeoff",
+      "reason": "takeoff altitude reached",
+      "time_s": 8.165,
+      "to": "mission"
+    },
+    {
+      "from": "mission",
+      "reason": "failsafe rtl",
+      "time_s": 28.202,
+      "to": "rtl"
+    },
+    {
+      "from": "rtl",
+      "reason": "arrived home",
+      "time_s": 44.302,
+      "to": "landing"
+    },
+    {
+      "from": "landing",
+      "reason": "touchdown",
+      "time_s": 77.312,
+      "to": "disarmed"
+    }
+  ]
+}
