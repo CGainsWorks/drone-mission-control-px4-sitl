@@ -196,7 +196,7 @@ jobs:
   sitl-campaign:
     name: Full PX4 SITL campaign (SIH)
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - uses: actions/checkout@v4
@@ -236,10 +236,19 @@ jobs:
       - name: Every flight behaved as specified
         run: python analysis/make_sitl_results.py --flights results/sitl-campaign --check-only
 
+      # The facade survey with the reference comparison's gains, unchanged:
+      # the evidence for why the campaign uses gains tuned for PX4 SIH. Flown
+      # and uploaded, not gated, because doing badly is what it shows.
+      - name: Fly the reference-gain flights
+        if: always()
+        run: python scripts/run_sitl_campaign.py --campaign transfer --output results/sitl-transfer || true
+
       - name: Upload the flights
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sitl-campaign
-          path: results/sitl-campaign
+          path: |
+            results/sitl-campaign
+            results/sitl-transfer
           if-no-files-found: warn
