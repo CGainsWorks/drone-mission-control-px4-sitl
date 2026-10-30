@@ -44,6 +44,7 @@ from mission_control.logs.flight_log import STATE_CODES  # noqa: E402
 from mission_control.mavlink_bridge import BackendError, make_backend  # noqa: E402
 from mission_control.mavlink_bridge.link_proxy import UdpLinkProxy  # noqa: E402
 from mission_control.mission import MissionExecutive, MissionState, load_mission  # noqa: E402
+from mission_control.mission.builder import build_hold  # noqa: E402
 from mission_control.mission.schema import FailsafeSpec  # noqa: E402
 from mission_control.safety import FailsafeMatrix, Geofence, SystemStatus  # noqa: E402
 
@@ -157,6 +158,7 @@ def main() -> int:
         # first mode report after connecting predates the switch to offboard,
         # so it is not evidence of anything.
         offboard_seen = False
+        silent_since = None
         steps = 0
 
         while True:
@@ -213,7 +215,14 @@ def main() -> int:
                 in_air=executive.in_air,
                 armed=True,
             )
-            action = failsafe.update(status)
+            if handed_over_s is None:
+                action = failsafe.update(status)
+            else:
+                # PX4 is landing the vehicle and the matrix's job is done.
+                # Evaluating it further would read the descent through the
+                # fence floor as a breach, since the state machine is still in
+                # whatever phase it handed over from.
+                action = failsafe.action
             reference = executive.update(elapsed, state, action)
 
             if executive.state == MissionState.MISSION and mission_started_s is None:
@@ -266,6 +275,22 @@ def main() -> int:
             # --- control ---------------------------------------------------
             sending = handed_over_s is None
             link_up = backend.link_silence_s < 0.5 and not (relay and relay.dropping)
+            if not link_up:
+                silent_since = elapsed if silent_since is None else silent_since
+            elif silent_since is not None:
+                went_silent, silent_since = silent_since, None
+                if (executive.state == MissionState.HOLD
+                        and executive.transitions[-1][0] >= went_silent):
+                    # The hold was decided while the link was down, so it was
+                    # anchored to the last position received before the
+                    # silence. PX4 has since stopped the vehicle somewhere
+                    # further on with its own offboard-loss hold. Holding means
+                    # holding where the vehicle is, so re-anchor there.
+                    executive.reference = build_hold(
+                        state.position, 1e6, mission.defaults, yaw=state.yaw,
+                        start_time_s=elapsed)
+                    tracker.reset(state)
+                    events["hold_reanchored_s"] = round(elapsed, 2)
             if (sending and executive.in_air and link_up and offboard_seen
                     and mode not in ("offboard", "unknown")):
                 # PX4 dropped out of offboard (its own reaction to the setpoint
